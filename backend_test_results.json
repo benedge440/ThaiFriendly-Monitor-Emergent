@@ -1,0 +1,127 @@
+{
+  "summary": {
+    "tests_run": 10,
+    "tests_passed": 10,
+    "success_rate": 100.0,
+    "timestamp": "2026-03-04T15:36:02.554435"
+  },
+  "results": [
+    {
+      "test_name": "API Root",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "message": "NetSentinel API v1.0"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:56.140562"
+    },
+    {
+      "test_name": "Get Settings",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "id": "b3341310-2589-4413-8647-c72a9fe04100",
+        "thaifriendly_email": "",
+        "has_password": false,
+        "target_username": "MayimeTH",
+        "notification_email": "",
+        "check_interval_minutes": 10
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:56.312785"
+    },
+    {
+      "test_name": "Update Settings",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "status": "success",
+        "message": "Settings updated"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:56.484449"
+    },
+    {
+      "test_name": "Get Settings",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "id": "b3341310-2589-4413-8647-c72a9fe04100",
+        "thaifriendly_email": "test@example.com",
+        "has_password": true,
+        "target_username": "MayimeTH",
+        "notification_email": "ben3162@hotmail.com",
+        "check_interval_minutes": 10
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:56.591649"
+    },
+    {
+      "test_name": "Get History",
+      "success": true,
+      "status_code": 200,
+      "response_data": [],
+      "error": null,
+      "timestamp": "2026-03-04T15:35:56.701454"
+    },
+    {
+      "test_name": "Monitoring Status",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "is_monitoring": false,
+        "current_status": null,
+        "last_checked": null,
+        "target_username": "MayimeTH"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:56.873261"
+    },
+    {
+      "test_name": "Start Monitoring",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "status": "started",
+        "message": "Monitoring started (every 10 minutes)"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:59.627094"
+    },
+    {
+      "test_name": "Stop Monitoring",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "status": "stopped",
+        "message": "Monitoring stopped"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:35:59.735917"
+    },
+    {
+      "test_name": "Check Now",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "status": "checked",
+        "is_online": true,
+        "last_checked": "2026-03-04T15:36:02.382127+00:00"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:36:02.408942"
+    },
+    {
+      "test_name": "Clear History",
+      "success": true,
+      "status_code": 200,
+      "response_data": {
+        "status": "success",
+        "message": "History cleared"
+      },
+      "error": null,
+      "timestamp": "2026-03-04T15:36:02.553533"
+    }
+  ]
+}

@@ -1,52 +1,673 @@
-import { useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
 import axios from "axios";
+import { Toaster, toast } from "sonner";
+import { motion, AnimatePresence } from "framer-motion";
+import { 
+  Activity, 
+  WifiOff, 
+  Settings, 
+  Terminal, 
+  RefreshCcw, 
+  Play, 
+  Square, 
+  Shield, 
+  Eye, 
+  EyeOff,
+  Trash2,
+  Bell,
+  BellOff
+} from "lucide-react";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { ScrollArea } from "./components/ui/scroll-area";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
+// Status Hero Component
+const StatusHero = ({ isOnline, lastChecked, targetUsername, isMonitoring }) => {
+  const statusText = isOnline === null ? "UNKNOWN" : isOnline ? "ONLINE" : "OFFLINE";
+  const statusClass = isOnline === null ? "text-[#888888]" : isOnline ? "text-[#00FF9C] glow-green" : "text-[#FF2E2E] glow-red";
+  const pulseClass = isOnline === null ? "" : isOnline ? "animate-pulse-green" : "animate-pulse-red";
+  
   return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
+    <motion.div 
+      className={`cyber-panel p-8 md:p-12 text-center relative ${pulseClass}`}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.5 }}
+      data-testid="status-hero"
+    >
+      <div className="absolute inset-0 grid-bg opacity-30" />
+      <div className="relative z-10">
+        <p className="text-xs uppercase tracking-[0.3em] text-[#888888] mb-2 font-mono" data-testid="monitoring-label">
+          {isMonitoring ? "MONITORING ACTIVE" : "MONITORING PAUSED"}
+        </p>
+        <p className="text-sm md:text-base font-mono text-[#00F0FF] mb-4" data-testid="target-username">
+          TARGET: {targetUsername}
+        </p>
+        <motion.h1 
+          className={`text-5xl md:text-7xl lg:text-8xl font-bold font-mono ${statusClass} glitch-text`}
+          key={statusText}
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          data-testid="status-indicator"
         >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
+          [ {statusText} ]
+        </motion.h1>
+        <p className="mt-6 text-sm text-[#888888] font-mono" data-testid="last-checked">
+          {lastChecked ? `Last checked: ${new Date(lastChecked).toLocaleString()}` : "Not checked yet"}
+        </p>
+      </div>
+    </motion.div>
+  );
+};
+
+// Control Panel Component
+const ControlPanel = ({ isMonitoring, onStart, onStop, onRefresh, isLoading }) => {
+  return (
+    <div className="cyber-panel p-6" data-testid="control-panel">
+      <h2 className="text-sm uppercase tracking-[0.2em] text-[#888888] mb-4 font-mono flex items-center gap-2">
+        <Shield className="w-4 h-4" />
+        CONTROLS
+      </h2>
+      <div className="flex flex-col gap-3">
+        {!isMonitoring ? (
+          <Button
+            onClick={onStart}
+            disabled={isLoading}
+            className="cyber-btn cyber-btn-primary w-full flex items-center justify-center gap-2"
+            data-testid="start-btn"
+          >
+            <Play className="w-4 h-4" />
+            START MONITORING
+          </Button>
+        ) : (
+          <Button
+            onClick={onStop}
+            disabled={isLoading}
+            className="cyber-btn cyber-btn-destructive w-full flex items-center justify-center gap-2"
+            data-testid="stop-btn"
+          >
+            <Square className="w-4 h-4" />
+            STOP MONITORING
+          </Button>
+        )}
+        <Button
+          onClick={onRefresh}
+          disabled={isLoading}
+          variant="outline"
+          className="w-full flex items-center justify-center gap-2 border-[#262626] hover:border-[#00F0FF] hover:text-[#00F0FF] transition-colors"
+          data-testid="refresh-btn"
+        >
+          <RefreshCcw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+          CHECK NOW
+        </Button>
+      </div>
     </div>
   );
 };
 
-function App() {
+// History Log Component
+const HistoryLog = ({ history, onClear }) => {
   return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+    <div className="cyber-panel p-6 flex flex-col h-full" data-testid="history-panel">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm uppercase tracking-[0.2em] text-[#888888] font-mono flex items-center gap-2">
+          <Terminal className="w-4 h-4" />
+          ACTIVITY LOG
+        </h2>
+        <Button
+          onClick={onClear}
+          variant="ghost"
+          size="sm"
+          className="text-[#888888] hover:text-[#FF2E2E] h-8 px-2"
+          data-testid="clear-history-btn"
+        >
+          <Trash2 className="w-4 h-4" />
+        </Button>
+      </div>
+      <ScrollArea className="flex-1 min-h-[300px] max-h-[400px]">
+        <div className="space-y-2 font-mono text-sm">
+          <AnimatePresence>
+            {history.length === 0 ? (
+              <p className="text-[#888888] text-center py-8">No activity recorded yet</p>
+            ) : (
+              history.map((entry, index) => (
+                <motion.div
+                  key={entry.id}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 20 }}
+                  transition={{ delay: index * 0.05 }}
+                  className={`flex items-start gap-3 p-3 rounded-lg ${
+                    entry.status_changed ? 'bg-[#151515]' : 'bg-transparent'
+                  }`}
+                  data-testid={`history-entry-${index}`}
+                >
+                  <div className={`status-dot mt-1.5 ${entry.is_online ? 'online' : 'offline'}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className={entry.is_online ? 'text-[#00FF9C]' : 'text-[#FF2E2E]'}>
+                      {entry.is_online ? 'ONLINE' : 'OFFLINE'}
+                      {entry.status_changed && (
+                        <span className="ml-2 text-[#00F0FF]">[STATUS CHANGED]</span>
+                      )}
+                    </p>
+                    <p className="text-[#888888] text-xs mt-1">
+                      {new Date(entry.checked_at).toLocaleString()}
+                    </p>
+                  </div>
+                </motion.div>
+              ))
+            )}
+          </AnimatePresence>
+        </div>
+      </ScrollArea>
+    </div>
+  );
+};
+
+// Settings Panel Component
+const SettingsPanel = ({ settings, onSave, isSaving }) => {
+  const [formData, setFormData] = useState({
+    thaifriendly_email: '',
+    thaifriendly_password: '',
+    target_username: 'MayimeTH',
+    notification_email: '',
+    check_interval_minutes: 10
+  });
+  const [showPassword, setShowPassword] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setFormData(prev => ({
+        ...prev,
+        thaifriendly_email: settings.thaifriendly_email || '',
+        target_username: settings.target_username || 'MayimeTH',
+        notification_email: settings.notification_email || '',
+        check_interval_minutes: settings.check_interval_minutes || 10
+      }));
+    }
+  }, [settings]);
+
+  useEffect(() => {
+    // Check notification permission
+    if ('Notification' in window) {
+      setNotificationsEnabled(Notification.permission === 'granted');
+    }
+  }, []);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSave(formData);
+  };
+
+  const requestNotificationPermission = async () => {
+    if ('Notification' in window) {
+      const permission = await Notification.requestPermission();
+      setNotificationsEnabled(permission === 'granted');
+      if (permission === 'granted') {
+        toast.success('Browser notifications enabled!');
+      } else {
+        toast.error('Browser notifications denied');
+      }
+    }
+  };
+
+  return (
+    <div className="cyber-panel p-6" data-testid="settings-panel">
+      <h2 className="text-sm uppercase tracking-[0.2em] text-[#888888] mb-6 font-mono flex items-center gap-2">
+        <Settings className="w-4 h-4" />
+        CREDENTIALS VAULT
+      </h2>
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wider text-[#888888]">
+            ThaiFriendly Email
+          </Label>
+          <Input
+            type="email"
+            value={formData.thaifriendly_email}
+            onChange={(e) => setFormData(prev => ({ ...prev, thaifriendly_email: e.target.value }))}
+            placeholder="your@email.com"
+            className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono"
+            data-testid="tf-email-input"
+          />
+        </div>
+        
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wider text-[#888888]">
+            ThaiFriendly Password
+          </Label>
+          <div className="relative">
+            <Input
+              type={showPassword ? "text" : "password"}
+              value={formData.thaifriendly_password}
+              onChange={(e) => setFormData(prev => ({ ...prev, thaifriendly_password: e.target.value }))}
+              placeholder={settings?.has_password ? "••••••••" : "Enter password"}
+              className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono pr-10"
+              data-testid="tf-password-input"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[#888888] hover:text-[#00F0FF] transition-colors"
+              data-testid="toggle-password-btn"
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wider text-[#888888]">
+            Target Username
+          </Label>
+          <Input
+            type="text"
+            value={formData.target_username}
+            onChange={(e) => setFormData(prev => ({ ...prev, target_username: e.target.value }))}
+            placeholder="MayimeTH"
+            className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono"
+            data-testid="target-username-input"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wider text-[#888888]">
+            Notification Email
+          </Label>
+          <Input
+            type="email"
+            value={formData.notification_email}
+            onChange={(e) => setFormData(prev => ({ ...prev, notification_email: e.target.value }))}
+            placeholder="notify@email.com"
+            className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono"
+            data-testid="notification-email-input"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wider text-[#888888]">
+            Check Interval (minutes)
+          </Label>
+          <Input
+            type="number"
+            min="1"
+            max="60"
+            value={formData.check_interval_minutes}
+            onChange={(e) => setFormData(prev => ({ ...prev, check_interval_minutes: parseInt(e.target.value) || 10 }))}
+            className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono"
+            data-testid="interval-input"
+          />
+        </div>
+
+        <div className="pt-4 space-y-3">
+          <Button
+            type="button"
+            onClick={requestNotificationPermission}
+            variant="outline"
+            className="w-full flex items-center justify-center gap-2 border-[#262626] hover:border-[#00F0FF]"
+            data-testid="enable-notifications-btn"
+          >
+            {notificationsEnabled ? (
+              <>
+                <Bell className="w-4 h-4 text-[#00FF9C]" />
+                <span className="text-[#00FF9C]">Browser Notifications Enabled</span>
+              </>
+            ) : (
+              <>
+                <BellOff className="w-4 h-4" />
+                Enable Browser Notifications
+              </>
+            )}
+          </Button>
+          
+          <Button
+            type="submit"
+            disabled={isSaving}
+            className="cyber-btn cyber-btn-primary w-full"
+            data-testid="save-settings-btn"
+          >
+            {isSaving ? 'SAVING...' : 'SAVE CREDENTIALS'}
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+// Main App Component
+function App() {
+  const [settings, setSettings] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [monitoringStatus, setMonitoringStatus] = useState({
+    is_monitoring: false,
+    current_status: null,
+    last_checked: null,
+    target_username: 'MayimeTH'
+  });
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const wsRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+
+  // Fetch settings
+  const fetchSettings = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/settings`);
+      setSettings(response.data);
+    } catch (error) {
+      console.error('Failed to fetch settings:', error);
+    }
+  }, []);
+
+  // Fetch history
+  const fetchHistory = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/history`);
+      setHistory(response.data);
+    } catch (error) {
+      console.error('Failed to fetch history:', error);
+    }
+  }, []);
+
+  // Fetch monitoring status
+  const fetchMonitoringStatus = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/monitoring/status`);
+      setMonitoringStatus(response.data);
+    } catch (error) {
+      console.error('Failed to fetch monitoring status:', error);
+    }
+  }, []);
+
+  // Connect WebSocket
+  const connectWebSocket = useCallback(() => {
+    const wsUrl = BACKEND_URL.replace('https://', 'wss://').replace('http://', 'ws://');
+    
+    try {
+      wsRef.current = new WebSocket(`${wsUrl}/api/ws`);
+      
+      wsRef.current.onopen = () => {
+        console.log('WebSocket connected');
+      };
+      
+      wsRef.current.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'status_update') {
+          setMonitoringStatus(prev => ({
+            ...prev,
+            current_status: data.is_online,
+            last_checked: data.last_checked,
+            target_username: data.target_username
+          }));
+          fetchHistory();
+          
+          // Show toast for status change
+          if (data.status_changed) {
+            if (data.is_online) {
+              toast.success(`${data.target_username} is now ONLINE!`, {
+                duration: 10000,
+              });
+              // Browser notification
+              if (Notification.permission === 'granted') {
+                new Notification('NetSentinel Alert', {
+                  body: `${data.target_username} is now ONLINE!`,
+                  icon: '/favicon.ico'
+                });
+              }
+            } else {
+              toast.info(`${data.target_username} went OFFLINE`);
+            }
+          }
+        } else if (data.type === 'notification') {
+          toast.success(data.message, { duration: 15000 });
+          // Browser notification
+          if (Notification.permission === 'granted') {
+            new Notification('NetSentinel Alert', {
+              body: data.message,
+              icon: '/favicon.ico'
+            });
+          }
+        } else if (data.type === 'connection') {
+          setMonitoringStatus(prev => ({
+            ...prev,
+            is_monitoring: data.is_monitoring,
+            current_status: data.current_status,
+            last_checked: data.last_checked
+          }));
+        }
+      };
+      
+      wsRef.current.onclose = () => {
+        console.log('WebSocket disconnected');
+        // Attempt to reconnect after 5 seconds
+        reconnectTimeoutRef.current = setTimeout(connectWebSocket, 5000);
+      };
+      
+      wsRef.current.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+    } catch (error) {
+      console.error('Failed to connect WebSocket:', error);
+    }
+  }, [fetchHistory]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchSettings();
+    fetchHistory();
+    fetchMonitoringStatus();
+    connectWebSocket();
+    
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [fetchSettings, fetchHistory, fetchMonitoringStatus, connectWebSocket]);
+
+  // Save settings
+  const handleSaveSettings = async (formData) => {
+    setIsSaving(true);
+    try {
+      await axios.put(`${API}/settings`, formData);
+      toast.success('Settings saved successfully!');
+      fetchSettings();
+    } catch (error) {
+      toast.error('Failed to save settings');
+      console.error('Failed to save settings:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Start monitoring
+  const handleStartMonitoring = async () => {
+    setIsLoading(true);
+    try {
+      const response = await axios.post(`${API}/monitoring/start`);
+      setMonitoringStatus(prev => ({ ...prev, is_monitoring: true }));
+      toast.success(response.data.message);
+      fetchHistory();
+      fetchMonitoringStatus();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to start monitoring');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Stop monitoring
+  const handleStopMonitoring = async () => {
+    setIsLoading(true);
+    try {
+      await axios.post(`${API}/monitoring/stop`);
+      setMonitoringStatus(prev => ({ ...prev, is_monitoring: false }));
+      toast.info('Monitoring stopped');
+    } catch (error) {
+      toast.error('Failed to stop monitoring');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Check now
+  const handleCheckNow = async () => {
+    setIsLoading(true);
+    try {
+      const response = await axios.post(`${API}/monitoring/check-now`);
+      setMonitoringStatus(prev => ({
+        ...prev,
+        current_status: response.data.is_online,
+        last_checked: response.data.last_checked
+      }));
+      fetchHistory();
+      toast.success('Status checked!');
+    } catch (error) {
+      toast.error('Failed to check status');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Clear history
+  const handleClearHistory = async () => {
+    try {
+      await axios.delete(`${API}/history`);
+      setHistory([]);
+      toast.success('History cleared');
+    } catch (error) {
+      toast.error('Failed to clear history');
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#050505] grid-bg scanlines" data-testid="app-container">
+      <Toaster 
+        position="top-right" 
+        theme="dark"
+        toastOptions={{
+          style: {
+            background: '#0A0A0A',
+            border: '1px solid rgba(255,255,255,0.1)',
+            color: '#EDEDED'
+          }
+        }}
+      />
+      
+      <div className="container mx-auto px-4 py-8 max-w-7xl">
+        {/* Header */}
+        <motion.header 
+          className="text-center mb-8"
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+        >
+          <h1 className="text-2xl md:text-3xl font-bold font-mono text-[#00F0FF] glow-cyan tracking-wider" data-testid="app-title">
+            NETSENTINEL
+          </h1>
+          <p className="text-[#888888] text-sm mt-2 font-mono">ThaiFriendly User Monitor v1.0</p>
+        </motion.header>
+
+        {/* Main Content - Tabs for mobile */}
+        <div className="md:hidden">
+          <Tabs defaultValue="status" className="w-full">
+            <TabsList className="grid w-full grid-cols-3 bg-[#0A0A0A] border border-[#262626]">
+              <TabsTrigger value="status" className="data-[state=active]:bg-[#151515] data-[state=active]:text-[#00FF9C]">
+                <Activity className="w-4 h-4" />
+              </TabsTrigger>
+              <TabsTrigger value="history" className="data-[state=active]:bg-[#151515] data-[state=active]:text-[#00FF9C]">
+                <Terminal className="w-4 h-4" />
+              </TabsTrigger>
+              <TabsTrigger value="settings" className="data-[state=active]:bg-[#151515] data-[state=active]:text-[#00FF9C]">
+                <Settings className="w-4 h-4" />
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="status" className="mt-4 space-y-4">
+              <StatusHero 
+                isOnline={monitoringStatus.current_status}
+                lastChecked={monitoringStatus.last_checked}
+                targetUsername={monitoringStatus.target_username}
+                isMonitoring={monitoringStatus.is_monitoring}
+              />
+              <ControlPanel 
+                isMonitoring={monitoringStatus.is_monitoring}
+                onStart={handleStartMonitoring}
+                onStop={handleStopMonitoring}
+                onRefresh={handleCheckNow}
+                isLoading={isLoading}
+              />
+            </TabsContent>
+            <TabsContent value="history" className="mt-4">
+              <HistoryLog history={history} onClear={handleClearHistory} />
+            </TabsContent>
+            <TabsContent value="settings" className="mt-4">
+              <SettingsPanel 
+                settings={settings}
+                onSave={handleSaveSettings}
+                isSaving={isSaving}
+              />
+            </TabsContent>
+          </Tabs>
+        </div>
+
+        {/* Main Content - Grid for desktop */}
+        <div className="hidden md:grid grid-cols-12 gap-4">
+          {/* Status Hero - Large */}
+          <div className="col-span-8">
+            <StatusHero 
+              isOnline={monitoringStatus.current_status}
+              lastChecked={monitoringStatus.last_checked}
+              targetUsername={monitoringStatus.target_username}
+              isMonitoring={monitoringStatus.is_monitoring}
+            />
+          </div>
+          
+          {/* Controls */}
+          <div className="col-span-4">
+            <ControlPanel 
+              isMonitoring={monitoringStatus.is_monitoring}
+              onStart={handleStartMonitoring}
+              onStop={handleStopMonitoring}
+              onRefresh={handleCheckNow}
+              isLoading={isLoading}
+            />
+          </div>
+          
+          {/* History Log */}
+          <div className="col-span-8">
+            <HistoryLog history={history} onClear={handleClearHistory} />
+          </div>
+          
+          {/* Settings */}
+          <div className="col-span-4">
+            <SettingsPanel 
+              settings={settings}
+              onSave={handleSaveSettings}
+              isSaving={isSaving}
+            />
+          </div>
+        </div>
+
+        {/* Footer */}
+        <motion.footer 
+          className="text-center mt-8 text-[#888888] text-xs font-mono"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+        >
+          <p>Secure monitoring system • Encrypted credentials</p>
+        </motion.footer>
+      </div>
     </div>
   );
 }

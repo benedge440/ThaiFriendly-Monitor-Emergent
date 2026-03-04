@@ -1,34 +1,45 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* NetSentinel - Custom Styles */
+
+/* Ensure dark mode is always applied */
+html {
+    color-scheme: dark;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
-}
-
-.App-header {
-    background-color: #0f0f10;
+/* Override any light mode defaults */
+.App {
+    background-color: #050505;
     min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
 }
 
-.App-link {
-    color: #61dafb;
+/* Custom button overrides for cyberpunk aesthetic */
+button {
+    font-family: 'JetBrains Mono', monospace;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+/* Tab styling overrides */
+[data-state="active"] {
+    background-color: #151515 !important;
+}
+
+/* Ensure inputs maintain dark theme */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0px 1000px #000000 inset !important;
+    -webkit-text-fill-color: #EDEDED !important;
+    caret-color: #EDEDED !important;
+}
+
+/* Smooth transitions */
+* {
+    transition-property: color, background-color, border-color, box-shadow;
+    transition-timing-function: ease;
+    transition-duration: 150ms;
+}
+
+/* Disable transitions for animations that need instant feedback */
+.glitch-text:hover,
+.animate-spin,
+.animate-pulse {
+    transition: none;
 }
