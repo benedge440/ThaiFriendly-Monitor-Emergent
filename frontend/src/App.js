@@ -16,7 +16,9 @@ import {
   EyeOff,
   Trash2,
   Bell,
-  BellOff
+  BellOff,
+  UserX,
+  Clock
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -27,15 +29,28 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Status Hero Component
-const StatusHero = ({ isOnline, lastChecked, targetUsername, isMonitoring }) => {
-  const statusText = isOnline === null ? "UNKNOWN" : isOnline ? "ONLINE" : "OFFLINE";
-  const statusClass = isOnline === null ? "text-[#888888]" : isOnline ? "text-[#00FF9C] glow-green" : "text-[#FF2E2E] glow-red";
-  const pulseClass = isOnline === null ? "" : isOnline ? "animate-pulse-green" : "animate-pulse-red";
+// Status Hero Component - Now shows status text instead of just ONLINE/OFFLINE
+const StatusHero = ({ statusText, lastChecked, targetUsername, isMonitoring, isCurrentlyOnline, userExists }) => {
+  // Determine display based on status
+  const getStatusDisplay = () => {
+    if (!statusText || statusText === "Unknown") {
+      return { text: "UNKNOWN", class: "text-[#888888]", pulseClass: "" };
+    }
+    if (!userExists || statusText === "User not found") {
+      return { text: "USER NOT FOUND", class: "text-[#888888]", pulseClass: "" };
+    }
+    if (isCurrentlyOnline || statusText.toLowerCase() === "online now") {
+      return { text: "ONLINE NOW", class: "text-[#00FF9C] glow-green", pulseClass: "animate-pulse-green" };
+    }
+    // Show the actual status text (e.g., "Online 2 days ago")
+    return { text: statusText.toUpperCase(), class: "text-[#00F0FF] glow-cyan", pulseClass: "" };
+  };
+
+  const display = getStatusDisplay();
   
   return (
     <motion.div 
-      className={`cyber-panel p-8 md:p-12 text-center relative ${pulseClass}`}
+      className={`cyber-panel p-8 md:p-12 text-center relative ${display.pulseClass}`}
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.5 }}
@@ -50,13 +65,13 @@ const StatusHero = ({ isOnline, lastChecked, targetUsername, isMonitoring }) => 
           TARGET: {targetUsername}
         </p>
         <motion.h1 
-          className={`text-5xl md:text-7xl lg:text-8xl font-bold font-mono ${statusClass} glitch-text`}
-          key={statusText}
+          className={`text-3xl md:text-5xl lg:text-6xl font-bold font-mono ${display.class} glitch-text`}
+          key={display.text}
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           data-testid="status-indicator"
         >
-          [ {statusText} ]
+          [ {display.text} ]
         </motion.h1>
         <p className="mt-6 text-sm text-[#888888] font-mono" data-testid="last-checked">
           {lastChecked ? `Last checked: ${new Date(lastChecked).toLocaleString()}` : "Not checked yet"}
@@ -111,7 +126,7 @@ const ControlPanel = ({ isMonitoring, onStart, onStop, onRefresh, isLoading }) =
   );
 };
 
-// History Log Component
+// History Log Component - Updated to show status text
 const HistoryLog = ({ history, onClear }) => {
   return (
     <div className="cyber-panel p-6 flex flex-col h-full" data-testid="history-panel">
@@ -136,32 +151,52 @@ const HistoryLog = ({ history, onClear }) => {
             {history.length === 0 ? (
               <p className="text-[#888888] text-center py-8">No activity recorded yet</p>
             ) : (
-              history.map((entry, index) => (
-                <motion.div
-                  key={entry.id}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
-                  transition={{ delay: index * 0.05 }}
-                  className={`flex items-start gap-3 p-3 rounded-lg ${
-                    entry.status_changed ? 'bg-[#151515]' : 'bg-transparent'
-                  }`}
-                  data-testid={`history-entry-${index}`}
-                >
-                  <div className={`status-dot mt-1.5 ${entry.is_online ? 'online' : 'offline'}`} />
-                  <div className="flex-1 min-w-0">
-                    <p className={entry.is_online ? 'text-[#00FF9C]' : 'text-[#FF2E2E]'}>
-                      {entry.is_online ? 'ONLINE' : 'OFFLINE'}
-                      {entry.status_changed && (
-                        <span className="ml-2 text-[#00F0FF]">[STATUS CHANGED]</span>
-                      )}
-                    </p>
-                    <p className="text-[#888888] text-xs mt-1">
-                      {new Date(entry.checked_at).toLocaleString()}
-                    </p>
-                  </div>
-                </motion.div>
-              ))
+              history.map((entry, index) => {
+                // Determine icon and color based on status
+                const isOnlineNow = entry.is_currently_online || entry.online_status?.toLowerCase() === "online now";
+                const userNotFound = !entry.user_exists || entry.online_status === "User not found";
+                
+                let statusColor = "text-[#00F0FF]"; // Default cyan for "online X ago"
+                let StatusIcon = Clock;
+                
+                if (userNotFound) {
+                  statusColor = "text-[#888888]";
+                  StatusIcon = UserX;
+                } else if (isOnlineNow) {
+                  statusColor = "text-[#00FF9C]";
+                  StatusIcon = Activity;
+                } else if (entry.online_status?.toLowerCase().includes("offline")) {
+                  statusColor = "text-[#FF2E2E]";
+                  StatusIcon = WifiOff;
+                }
+                
+                return (
+                  <motion.div
+                    key={entry.id}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: 20 }}
+                    transition={{ delay: index * 0.05 }}
+                    className={`flex items-start gap-3 p-3 rounded-lg ${
+                      entry.status_changed ? 'bg-[#151515]' : 'bg-transparent'
+                    }`}
+                    data-testid={`history-entry-${index}`}
+                  >
+                    <StatusIcon className={`w-4 h-4 mt-1 ${statusColor}`} />
+                    <div className="flex-1 min-w-0">
+                      <p className={statusColor}>
+                        {entry.online_status || (entry.is_currently_online ? 'ONLINE' : 'OFFLINE')}
+                        {entry.status_changed && (
+                          <span className="ml-2 text-[#FF9500]">[CHANGED]</span>
+                        )}
+                      </p>
+                      <p className="text-[#888888] text-xs mt-1">
+                        {new Date(entry.checked_at).toLocaleString()}
+                      </p>
+                    </div>
+                  </motion.div>
+                );
+              })
             )}
           </AnimatePresence>
         </div>
@@ -177,7 +212,8 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
     thaifriendly_password: '',
     target_username: 'MayimeTH',
     notification_email: '',
-    check_interval_minutes: 10
+    check_interval_minutes: 10,
+    session_cookie: ''
   });
   const [showPassword, setShowPassword] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
@@ -195,7 +231,6 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
   }, [settings]);
 
   useEffect(() => {
-    // Check notification permission
     if ('Notification' in window) {
       setNotificationsEnabled(Notification.permission === 'granted');
     }
@@ -306,6 +341,23 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
           />
         </div>
 
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-wider text-[#888888]">
+            Session Cookie (PHPSESSID)
+          </Label>
+          <Input
+            type="text"
+            value={formData.session_cookie}
+            onChange={(e) => setFormData(prev => ({ ...prev, session_cookie: e.target.value }))}
+            placeholder={settings?.has_session_cookie ? "Cookie saved" : "Paste from browser"}
+            className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono text-xs"
+            data-testid="session-cookie-input"
+          />
+          <p className="text-[10px] text-[#888888] mt-1">
+            Get from browser DevTools: F12 → Application → Cookies → PHPSESSID
+          </p>
+        </div>
+
         <div className="pt-4 space-y-3">
           <Button
             type="button"
@@ -348,8 +400,10 @@ function App() {
   const [monitoringStatus, setMonitoringStatus] = useState({
     is_monitoring: false,
     current_status: null,
+    is_currently_online: false,
     last_checked: null,
-    target_username: 'MayimeTH'
+    target_username: 'MayimeTH',
+    user_exists: true
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -403,15 +457,17 @@ function App() {
         if (data.type === 'status_update') {
           setMonitoringStatus(prev => ({
             ...prev,
-            current_status: data.is_online,
+            current_status: data.online_status,
+            is_currently_online: data.is_currently_online,
             last_checked: data.last_checked,
-            target_username: data.target_username
+            target_username: data.target_username,
+            user_exists: data.user_exists
           }));
           fetchHistory();
           
           // Show toast for status change
-          if (data.status_changed) {
-            if (data.is_online) {
+          if (data.status_changed && data.user_exists) {
+            if (data.is_currently_online) {
               toast.success(`${data.target_username} is now ONLINE!`, {
                 duration: 10000,
               });
@@ -423,12 +479,11 @@ function App() {
                 });
               }
             } else {
-              toast.info(`${data.target_username} went OFFLINE`);
+              toast.info(`${data.target_username}: ${data.online_status}`);
             }
           }
         } else if (data.type === 'notification') {
           toast.success(data.message, { duration: 15000 });
-          // Browser notification
           if (Notification.permission === 'granted') {
             new Notification('NetSentinel Alert', {
               body: data.message,
@@ -447,7 +502,6 @@ function App() {
       
       wsRef.current.onclose = () => {
         console.log('WebSocket disconnected');
-        // Attempt to reconnect after 5 seconds
         reconnectTimeoutRef.current = setTimeout(connectWebSocket, 5000);
       };
       
@@ -528,7 +582,7 @@ function App() {
       const response = await axios.post(`${API}/monitoring/check-now`);
       setMonitoringStatus(prev => ({
         ...prev,
-        current_status: response.data.is_online,
+        current_status: response.data.online_status,
         last_checked: response.data.last_checked
       }));
       fetchHistory();
@@ -594,10 +648,12 @@ function App() {
             </TabsList>
             <TabsContent value="status" className="mt-4 space-y-4">
               <StatusHero 
-                isOnline={monitoringStatus.current_status}
+                statusText={monitoringStatus.current_status}
                 lastChecked={monitoringStatus.last_checked}
                 targetUsername={monitoringStatus.target_username}
                 isMonitoring={monitoringStatus.is_monitoring}
+                isCurrentlyOnline={monitoringStatus.is_currently_online}
+                userExists={monitoringStatus.user_exists}
               />
               <ControlPanel 
                 isMonitoring={monitoringStatus.is_monitoring}
@@ -625,10 +681,12 @@ function App() {
           {/* Status Hero - Large */}
           <div className="col-span-8">
             <StatusHero 
-              isOnline={monitoringStatus.current_status}
+              statusText={monitoringStatus.current_status}
               lastChecked={monitoringStatus.last_checked}
               targetUsername={monitoringStatus.target_username}
               isMonitoring={monitoringStatus.is_monitoring}
+              isCurrentlyOnline={monitoringStatus.is_currently_online}
+              userExists={monitoringStatus.user_exists}
             />
           </div>
           

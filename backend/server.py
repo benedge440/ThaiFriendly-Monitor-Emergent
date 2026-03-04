@@ -1,12 +1,12 @@
-from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import re
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +18,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from cryptography.fernet import Fernet
 import base64
 import hashlib
-import json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -46,7 +45,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Encryption key for credentials (generate a fixed key based on a secret)
+# Encryption key for credentials
 SECRET_KEY = os.environ.get('SECRET_KEY', 'netsentinel-secret-key-2024')
 key = base64.urlsafe_b64encode(hashlib.sha256(SECRET_KEY.encode()).digest())
 cipher = Fernet(key)
@@ -54,7 +53,7 @@ cipher = Fernet(key)
 # Global state
 scheduler = AsyncIOScheduler()
 monitoring_active = False
-current_status = None
+current_status_text = None
 last_checked = None
 connected_websockets: List[WebSocket] = []
 
@@ -75,6 +74,7 @@ class SettingsUpdate(BaseModel):
     target_username: Optional[str] = None
     notification_email: Optional[str] = None
     check_interval_minutes: Optional[int] = None
+    session_cookie: Optional[str] = None  # PHPSESSID cookie from browser
 
 class SettingsResponse(BaseModel):
     id: str
@@ -83,26 +83,24 @@ class SettingsResponse(BaseModel):
     target_username: str
     notification_email: str
     check_interval_minutes: int
-
-class StatusHistory(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    target_username: str
-    is_online: bool
-    checked_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    status_changed: bool = False
+    has_session_cookie: bool = False
 
 class StatusHistoryResponse(BaseModel):
     id: str
     target_username: str
-    is_online: bool
+    online_status: str
+    is_currently_online: bool
     checked_at: str
     status_changed: bool
+    user_exists: bool
 
 class MonitoringStatus(BaseModel):
     is_monitoring: bool
-    current_status: Optional[bool] = None
+    current_status: Optional[str] = None
+    is_currently_online: bool = False
     last_checked: Optional[str] = None
     target_username: str = "MayimeTH"
+    user_exists: bool = True
 
 # Helper functions
 def encrypt_password(password: str) -> str:
@@ -122,19 +120,18 @@ async def broadcast_status(data: dict):
     for ws in disconnected:
         connected_websockets.remove(ws)
 
-async def send_email_notification(is_online: bool, username: str, notification_email: str):
+async def send_email_notification(status_text: str, username: str, notification_email: str, is_online_now: bool):
     """Send email notification when user comes online"""
     if not resend_api_key or not notification_email:
         logger.warning("Email notification skipped: No API key or notification email configured")
         return
     
-    status_text = "ONLINE" if is_online else "OFFLINE"
-    status_color = "#00FF9C" if is_online else "#FF2E2E"
+    status_color = "#00FF9C" if is_online_now else "#00F0FF"
     
     html_content = f"""
     <div style="font-family: 'Courier New', monospace; background-color: #050505; color: #EDEDED; padding: 40px; text-align: center;">
-        <h1 style="color: {status_color}; font-size: 48px; margin: 0;">[ {status_text} ]</h1>
-        <p style="font-size: 24px; margin-top: 20px;">User <strong>{username}</strong> is now {status_text.lower()}</p>
+        <h1 style="color: {status_color}; font-size: 36px; margin: 0;">[ {status_text.upper()} ]</h1>
+        <p style="font-size: 24px; margin-top: 20px;">User <strong>{username}</strong></p>
         <p style="color: #888888; font-size: 14px; margin-top: 30px;">NetSentinel Monitor • {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
     </div>
     """
@@ -143,7 +140,7 @@ async def send_email_notification(is_online: bool, username: str, notification_e
         params = {
             "from": os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev'),
             "to": [notification_email],
-            "subject": f"🔔 {username} is now {status_text} on ThaiFriendly",
+            "subject": f"🔔 {username}: {status_text} on ThaiFriendly",
             "html": html_content
         }
         email = await asyncio.to_thread(resend.Emails.send, params)
@@ -151,104 +148,220 @@ async def send_email_notification(is_online: bool, username: str, notification_e
     except Exception as e:
         logger.error(f"Failed to send email: {e}")
 
-async def check_thaifriendly_status(email: str, password: str, target_username: str) -> Optional[bool]:
+def parse_online_status(soup: BeautifulSoup, page_text: str) -> dict:
     """
-    Check if target user is online on ThaiFriendly.
-    Returns True if online, False if offline, None if error.
+    Parse the online status from a ThaiFriendly profile page.
+    Returns dict with: online_status (text), is_currently_online (bool), user_exists (bool)
     """
-    global current_status, last_checked
+    result = {
+        "online_status": "Unknown",
+        "is_currently_online": False,
+        "user_exists": True
+    }
+    
+    page_text_lower = page_text.lower()
+    html_str = str(soup).lower()
+    
+    # Check if user doesn't exist
+    not_found_indicators = [
+        "profile not found",
+        "user not found", 
+        "page not found",
+        "doesn't exist",
+        "member not found",
+        "no results",
+        "join thaifriendly to see"
+    ]
+    
+    for indicator in not_found_indicators:
+        if indicator in page_text_lower:
+            result["user_exists"] = False
+            result["online_status"] = "User not found"
+            return result
+    
+    # Look for "Online now" pattern
+    online_now_patterns = [
+        r'online\s*now',
+        r'currently\s*online',
+        r'active\s*now',
+        r'online\s*$'  # Just "Online" at end of line
+    ]
+    
+    for pattern in online_now_patterns:
+        if re.search(pattern, page_text_lower):
+            result["online_status"] = "Online now"
+            result["is_currently_online"] = True
+            return result
+    
+    # Look for "Online X ago" pattern - THIS IS THE KEY PATTERN
+    # Patterns like: "Online 2 days ago", "Last seen 5 hours ago"
+    time_ago_patterns = [
+        r'(?:online|last\s*(?:seen|active))\s*[:\s]*(\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)',
+        r'(\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)',
+    ]
+    
+    for pattern in time_ago_patterns:
+        match = re.search(pattern, page_text_lower)
+        if match:
+            time_text = match.group(1)
+            result["online_status"] = f"Online {time_text}"
+            result["is_currently_online"] = False
+            return result
+    
+    # Check HTML for online status elements
+    status_elements = soup.find_all(class_=lambda x: x and ('online' in str(x).lower() or 'status' in str(x).lower() or 'last-seen' in str(x).lower()) if x else False)
+    for elem in status_elements:
+        elem_text = elem.get_text(strip=True)
+        if elem_text and len(elem_text) < 100:
+            # Check if contains time ago
+            if 'ago' in elem_text.lower():
+                result["online_status"] = elem_text
+                result["is_currently_online"] = False
+                return result
+            elif 'online' in elem_text.lower() and 'now' in elem_text.lower():
+                result["online_status"] = "Online now"
+                result["is_currently_online"] = True
+                return result
+    
+    # Look for any span/div containing online info
+    for elem in soup.find_all(['span', 'div', 'p', 'small']):
+        text = elem.get_text(strip=True).lower()
+        if 'online' in text and len(text) < 50:
+            if 'ago' in text:
+                result["online_status"] = elem.get_text(strip=True)
+                return result
+            elif text in ['online', 'online now']:
+                result["online_status"] = "Online now"
+                result["is_currently_online"] = True
+                return result
+    
+    return result
+
+async def check_thaifriendly_status(email: str, password: str, target_username: str, session_cookie: str = None) -> dict:
+    """
+    Check target user's online status on ThaiFriendly.
+    Uses session cookie if provided, otherwise attempts login.
+    """
+    global current_status_text, last_checked
+    
+    result = {
+        "online_status": "Error",
+        "is_currently_online": False,
+        "user_exists": False,
+        "error": None
+    }
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
     
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            # Step 1: Get login page to get any necessary cookies/tokens
-            await client.get("https://www.thaifriendly.com/login")
+        cookies = {}
+        if session_cookie:
+            cookies["PHPSESSID"] = session_cookie
+            logger.info(f"Using provided session cookie")
+        
+        async with httpx.AsyncClient(follow_redirects=True, timeout=45.0, cookies=cookies) as http_client:
+            # If no session cookie, try to login
+            if not session_cookie:
+                logger.info("No session cookie, attempting login...")
+                login_page = await http_client.get("https://www.thaifriendly.com/login", headers=headers)
+                
+                csrf_patterns = [
+                    r'name="CSRFtoken"\s+type="hidden"\s+value="([^"]*)"',
+                    r'name="CSRFtoken"[^>]*value="([^"]*)"',
+                    r'CSRFtoken[^>]*value="([^"]*)"',
+                ]
+                
+                csrf_token = ""
+                for pattern in csrf_patterns:
+                    csrf_match = re.search(pattern, login_page.text, re.IGNORECASE)
+                    if csrf_match:
+                        csrf_token = csrf_match.group(1)
+                        break
+                
+                if csrf_token:
+                    login_data = {
+                        "username": email,
+                        "password": password,
+                        "submit": "Log In",
+                        "CSRFtoken": csrf_token
+                    }
+                    
+                    await http_client.post(
+                        "https://www.thaifriendly.com/index.php",
+                        data=login_data,
+                        headers={**headers, "Content-Type": "application/x-www-form-urlencoded"}
+                    )
             
-            # Step 2: Login
-            login_data = {
-                "email": email,
-                "password": password,
-                "remember": "1"
-            }
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Referer": "https://www.thaifriendly.com/login"
-            }
-            
-            login_response = await client.post(
-                "https://www.thaifriendly.com/login",
-                data=login_data,
-                headers=headers
-            )
-            
-            logger.info(f"Login response status: {login_response.status_code}")
-            
-            # Step 3: Search for the user
-            search_url = f"https://www.thaifriendly.com/search?username={target_username}"
-            await client.get(search_url, headers=headers)
-            
-            # Step 4: Try to access user profile
+            # Access user profile
+            logger.info(f"Fetching profile for {target_username}...")
             profile_url = f"https://www.thaifriendly.com/{target_username}"
-            profile_response = await client.get(profile_url, headers=headers)
+            profile_response = await http_client.get(profile_url, headers=headers)
             
-            logger.info(f"Profile response status: {profile_response.status_code}")
+            logger.info(f"Profile status: {profile_response.status_code}")
             
-            # Parse the response to check online status
+            if profile_response.status_code == 404:
+                result["user_exists"] = False
+                result["online_status"] = "User not found"
+                return result
+            
             soup = BeautifulSoup(profile_response.text, 'html.parser')
+            page_text = soup.get_text()
             
-            # Look for online indicators (common patterns)
-            # ThaiFriendly typically shows "Online" text or a green dot
-            page_text = soup.get_text().lower()
+            logger.info(f"Page text preview: {page_text[:300]}")
             
-            is_online = False
+            # Check if we need to login (profile blocked)
+            if "join thaifriendly to see" in page_text.lower() or "looking for " in page_text.lower():
+                logger.warning("Profile blocked - not logged in")
+                result["error"] = "Not logged in - please provide your browser session cookie (PHPSESSID)"
+                result["online_status"] = "Login required"
+                return result
             
-            # Check for various online indicators
-            online_indicators = [
-                'online now',
-                'currently online',
-                'is online',
-                'class="online"',
-                'status-online',
-                'user-online'
-            ]
+            # Parse online status
+            status_result = parse_online_status(soup, page_text)
             
-            for indicator in online_indicators:
-                if indicator in page_text or indicator in str(soup).lower():
-                    is_online = True
-                    break
-            
-            # Also check for specific HTML elements
-            online_elements = soup.find_all(class_=lambda x: x and 'online' in x.lower() if x else False)
-            if online_elements:
-                is_online = True
-            
-            # Check for green status dot images or spans
-            _ = soup.find_all(['span', 'div', 'img'], attrs={'class': lambda x: x and any(indicator in str(x).lower() for indicator in ['status', 'online', 'active']) if x else False})
+            result["online_status"] = status_result["online_status"]
+            result["is_currently_online"] = status_result["is_currently_online"]
+            result["user_exists"] = status_result["user_exists"]
             
             last_checked = datetime.now(timezone.utc).isoformat()
-            current_status = is_online
+            current_status_text = result["online_status"]
             
-            return is_online
+            logger.info(f"Status check result: {result}")
+            return result
             
+    except httpx.TimeoutException:
+        logger.error("Request timed out")
+        result["error"] = "Request timed out"
+        return result
     except Exception as e:
         logger.error(f"Error checking ThaiFriendly status: {e}")
-        return None
+        result["error"] = str(e)
+        return result
 
 async def perform_status_check():
     """Perform a status check and handle notifications"""
-    global current_status, last_checked
+    global current_status_text, last_checked
     
     try:
-        # Get settings
         settings_doc = await db.settings.find_one({}, {"_id": 0})
-        if not settings_doc or not settings_doc.get('thaifriendly_email') or not settings_doc.get('thaifriendly_password_encrypted'):
-            logger.warning("No credentials configured, skipping check")
+        if not settings_doc:
+            logger.warning("No settings configured, skipping check")
             return
         
-        email = settings_doc['thaifriendly_email']
-        password = decrypt_password(settings_doc['thaifriendly_password_encrypted'])
+        # Check for session cookie first, then credentials
+        session_cookie = settings_doc.get('session_cookie')
+        email = settings_doc.get('thaifriendly_email', '')
+        password_encrypted = settings_doc.get('thaifriendly_password_encrypted', '')
+        
+        if not session_cookie and (not email or not password_encrypted):
+            logger.warning("No credentials or session cookie configured, skipping check")
+            return
+        
+        password = decrypt_password(password_encrypted) if password_encrypted else ''
         target_username = settings_doc.get('target_username', 'MayimeTH')
         notification_email = settings_doc.get('notification_email', '')
         
@@ -258,48 +371,78 @@ async def perform_status_check():
             {"_id": 0},
             sort=[("checked_at", -1)]
         )
-        previous_status = last_history.get('is_online') if last_history else None
+        previous_status = last_history.get('online_status') if last_history else None
+        previous_is_online = last_history.get('is_currently_online', False) if last_history else False
         
         # Check current status
-        is_online = await check_thaifriendly_status(email, password, target_username)
+        status_result = await check_thaifriendly_status(email, password, target_username, session_cookie)
         
-        if is_online is None:
-            logger.error("Failed to check status")
+        if status_result.get("error"):
+            logger.error(f"Failed to check status: {status_result['error']}")
+            # Broadcast error
+            await broadcast_status({
+                "type": "error",
+                "message": status_result['error'],
+                "target_username": target_username
+            })
+            return
+        
+        # Don't record if user doesn't exist
+        if not status_result["user_exists"]:
+            logger.info(f"User {target_username} not found, not recording")
+            await broadcast_status({
+                "type": "status_update",
+                "online_status": "User not found",
+                "is_currently_online": False,
+                "last_checked": last_checked,
+                "status_changed": False,
+                "target_username": target_username,
+                "user_exists": False
+            })
             return
         
         # Determine if status changed
-        status_changed = previous_status is not None and previous_status != is_online
+        status_changed = previous_status != status_result["online_status"]
+        became_online = not previous_is_online and status_result["is_currently_online"]
         
         # Save to history
         history_entry = {
             "id": str(uuid.uuid4()),
             "target_username": target_username,
-            "is_online": is_online,
+            "online_status": status_result["online_status"],
+            "is_currently_online": status_result["is_currently_online"],
             "checked_at": datetime.now(timezone.utc).isoformat(),
-            "status_changed": status_changed
+            "status_changed": status_changed,
+            "user_exists": True
         }
         await db.status_history.insert_one(history_entry)
         
         # Broadcast to websockets
         await broadcast_status({
             "type": "status_update",
-            "is_online": is_online,
+            "online_status": status_result["online_status"],
+            "is_currently_online": status_result["is_currently_online"],
             "last_checked": last_checked,
             "status_changed": status_changed,
-            "target_username": target_username
+            "target_username": target_username,
+            "user_exists": True
         })
         
-        # Send notification if user came online
-        if status_changed and is_online:
-            await send_email_notification(is_online, target_username, notification_email)
-            # Also broadcast notification event
+        # Send notification if user came online NOW
+        if became_online:
+            await send_email_notification(
+                status_result["online_status"],
+                target_username,
+                notification_email,
+                True
+            )
             await broadcast_status({
                 "type": "notification",
                 "message": f"{target_username} is now ONLINE!",
-                "is_online": True
+                "is_currently_online": True
             })
         
-        logger.info(f"Status check complete: {target_username} is {'ONLINE' if is_online else 'OFFLINE'}")
+        logger.info(f"Status check complete: {target_username} - {status_result['online_status']}")
         
     except Exception as e:
         logger.error(f"Error in status check: {e}")
@@ -311,10 +454,8 @@ async def root():
 
 @api_router.get("/settings", response_model=SettingsResponse)
 async def get_settings():
-    """Get current settings (password excluded)"""
     settings_doc = await db.settings.find_one({}, {"_id": 0})
     if not settings_doc:
-        # Create default settings
         default_settings = Settings()
         doc = default_settings.model_dump()
         doc['created_at'] = doc['created_at'].isoformat()
@@ -328,12 +469,12 @@ async def get_settings():
         has_password=bool(settings_doc.get('thaifriendly_password_encrypted')),
         target_username=settings_doc.get('target_username', 'MayimeTH'),
         notification_email=settings_doc.get('notification_email', ''),
-        check_interval_minutes=settings_doc.get('check_interval_minutes', 10)
+        check_interval_minutes=settings_doc.get('check_interval_minutes', 10),
+        has_session_cookie=bool(settings_doc.get('session_cookie'))
     )
 
 @api_router.put("/settings")
 async def update_settings(settings: SettingsUpdate):
-    """Update settings"""
     update_data = {}
     
     if settings.thaifriendly_email is not None:
@@ -351,9 +492,11 @@ async def update_settings(settings: SettingsUpdate):
     if settings.check_interval_minutes is not None:
         update_data['check_interval_minutes'] = settings.check_interval_minutes
     
+    if settings.session_cookie is not None:
+        update_data['session_cookie'] = settings.session_cookie
+    
     update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
-    # Ensure settings document exists
     existing = await db.settings.find_one({})
     if not existing:
         default_settings = Settings()
@@ -369,53 +512,62 @@ async def update_settings(settings: SettingsUpdate):
 
 @api_router.get("/history", response_model=List[StatusHistoryResponse])
 async def get_history(limit: int = 100):
-    """Get status history"""
     history = await db.status_history.find(
         {},
         {"_id": 0}
     ).sort("checked_at", -1).limit(limit).to_list(limit)
     
-    return [StatusHistoryResponse(
-        id=h.get('id', ''),
-        target_username=h.get('target_username', 'MayimeTH'),
-        is_online=h.get('is_online', False),
-        checked_at=h.get('checked_at', ''),
-        status_changed=h.get('status_changed', False)
-    ) for h in history]
+    result = []
+    for h in history:
+        online_status = h.get('online_status')
+        if online_status is None or isinstance(online_status, bool):
+            is_online = h.get('is_online', h.get('is_currently_online', False))
+            online_status = "Online now" if is_online else "Offline"
+        
+        result.append(StatusHistoryResponse(
+            id=h.get('id', ''),
+            target_username=h.get('target_username', 'MayimeTH'),
+            online_status=str(online_status),
+            is_currently_online=h.get('is_currently_online', h.get('is_online', False)),
+            checked_at=h.get('checked_at', ''),
+            status_changed=h.get('status_changed', False),
+            user_exists=h.get('user_exists', True)
+        ))
+    
+    return result
 
 @api_router.get("/monitoring/status", response_model=MonitoringStatus)
 async def get_monitoring_status():
-    """Get current monitoring status"""
     settings_doc = await db.settings.find_one({}, {"_id": 0})
     target_username = settings_doc.get('target_username', 'MayimeTH') if settings_doc else 'MayimeTH'
     
     return MonitoringStatus(
         is_monitoring=monitoring_active,
-        current_status=current_status,
+        current_status=current_status_text,
+        is_currently_online=current_status_text == "Online now" if current_status_text else False,
         last_checked=last_checked,
         target_username=target_username
     )
 
 @api_router.post("/monitoring/start")
 async def start_monitoring():
-    """Start the monitoring scheduler"""
     global monitoring_active
     
-    # Get settings
     settings_doc = await db.settings.find_one({}, {"_id": 0})
-    if not settings_doc or not settings_doc.get('thaifriendly_email') or not settings_doc.get('thaifriendly_password_encrypted'):
-        raise HTTPException(status_code=400, detail="Please configure ThaiFriendly credentials first")
+    session_cookie = settings_doc.get('session_cookie') if settings_doc else None
+    has_creds = settings_doc and settings_doc.get('thaifriendly_email') and settings_doc.get('thaifriendly_password_encrypted')
+    
+    if not session_cookie and not has_creds:
+        raise HTTPException(status_code=400, detail="Please configure session cookie or ThaiFriendly credentials first")
     
     interval = settings_doc.get('check_interval_minutes', 10)
     
     if monitoring_active:
         return {"status": "already_running", "message": "Monitoring is already active"}
     
-    # Remove existing job if any
     if scheduler.get_job('status_check'):
         scheduler.remove_job('status_check')
     
-    # Add new job
     scheduler.add_job(
         perform_status_check,
         'interval',
@@ -436,7 +588,6 @@ async def start_monitoring():
 
 @api_router.post("/monitoring/stop")
 async def stop_monitoring():
-    """Stop the monitoring scheduler"""
     global monitoring_active
     
     if scheduler.get_job('status_check'):
@@ -448,17 +599,15 @@ async def stop_monitoring():
 
 @api_router.post("/monitoring/check-now")
 async def check_now():
-    """Perform an immediate status check"""
     await perform_status_check()
     return {
         "status": "checked",
-        "is_online": current_status,
+        "online_status": current_status_text,
         "last_checked": last_checked
     }
 
 @api_router.delete("/history")
 async def clear_history():
-    """Clear all status history"""
     await db.status_history.delete_many({})
     return {"status": "success", "message": "History cleared"}
 
@@ -469,22 +618,20 @@ async def websocket_endpoint(websocket: WebSocket):
     connected_websockets.append(websocket)
     
     try:
-        # Send current status on connect
         await websocket.send_json({
             "type": "connection",
             "is_monitoring": monitoring_active,
-            "current_status": current_status,
+            "current_status": current_status_text,
             "last_checked": last_checked
         })
         
         while True:
-            # Keep connection alive
             await websocket.receive_text()
     except WebSocketDisconnect:
         if websocket in connected_websockets:
             connected_websockets.remove(websocket)
 
-# Include the router in the main app
+# Include the router
 app.include_router(api_router)
 
 app.add_middleware(
@@ -497,7 +644,6 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize scheduler on startup"""
     if not scheduler.running:
         scheduler.start()
     logger.info("NetSentinel API started")
