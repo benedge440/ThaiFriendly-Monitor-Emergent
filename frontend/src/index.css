@@ -56,6 +56,19 @@ code, .font-mono {
     background: var(--text-muted);
 }
 
+/* Mobile touch scrolling */
+.overflow-y-auto {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+}
+
+/* Ensure touch events work on scrollable areas */
+@media (pointer: coarse) {
+    .overflow-y-auto {
+        scroll-behavior: smooth;
+    }
+}
+
 /* Scanline overlay effect */
 .scanlines::before {
     content: '';

@@ -334,9 +334,12 @@ const HistoryLog = ({ history, onClear }) => {
         </p>
       )}
       
-      {/* History List */}
-      <ScrollArea className="flex-1 min-h-[250px] max-h-[350px]">
-        <div className="space-y-2 font-mono text-sm">
+      {/* History List - Using native scroll for mobile compatibility */}
+      <div 
+        className="flex-1 min-h-[250px] max-h-[350px] overflow-y-auto overscroll-contain"
+        style={{ WebkitOverflowScrolling: 'touch' }}
+      >
+        <div className="space-y-2 font-mono text-sm pr-2">
           <AnimatePresence>
             {filteredHistory.length === 0 ? (
               <p className="text-[#888888] text-center py-8">
@@ -399,7 +402,7 @@ const HistoryLog = ({ history, onClear }) => {
             )}
           </AnimatePresence>
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 };
