@@ -11,13 +11,13 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import asyncio
-import httpx
 from bs4 import BeautifulSoup
 import resend
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from cryptography.fernet import Fernet
 import base64
 import hashlib
+from playwright.async_api import async_playwright
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -239,8 +239,8 @@ def parse_online_status(soup: BeautifulSoup, page_text: str) -> dict:
 
 async def check_thaifriendly_status(email: str, password: str, target_username: str, session_cookie: str = None) -> dict:
     """
-    Check target user's online status on ThaiFriendly.
-    Uses session cookie if provided, otherwise attempts login.
+    Check target user's online status on ThaiFriendly using Playwright.
+    Uses session cookie for authentication.
     """
     global current_status_text, last_checked
     
@@ -251,92 +251,106 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
         "error": None
     }
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
+    if not session_cookie:
+        result["error"] = "Session cookie required - please login to ThaiFriendly in your browser and provide the PHPSESSID cookie"
+        result["online_status"] = "Login required"
+        return result
     
     try:
-        cookies = {}
-        if session_cookie:
-            cookies["PHPSESSID"] = session_cookie
-            logger.info(f"Using provided session cookie")
-        
-        async with httpx.AsyncClient(follow_redirects=True, timeout=45.0, cookies=cookies) as http_client:
-            # If no session cookie, try to login
-            if not session_cookie:
-                logger.info("No session cookie, attempting login...")
-                login_page = await http_client.get("https://www.thaifriendly.com/login", headers=headers)
-                
-                csrf_patterns = [
-                    r'name="CSRFtoken"\s+type="hidden"\s+value="([^"]*)"',
-                    r'name="CSRFtoken"[^>]*value="([^"]*)"',
-                    r'CSRFtoken[^>]*value="([^"]*)"',
-                ]
-                
-                csrf_token = ""
-                for pattern in csrf_patterns:
-                    csrf_match = re.search(pattern, login_page.text, re.IGNORECASE)
-                    if csrf_match:
-                        csrf_token = csrf_match.group(1)
-                        break
-                
-                if csrf_token:
-                    login_data = {
-                        "username": email,
-                        "password": password,
-                        "submit": "Log In",
-                        "CSRFtoken": csrf_token
-                    }
-                    
-                    await http_client.post(
-                        "https://www.thaifriendly.com/index.php",
-                        data=login_data,
-                        headers={**headers, "Content-Type": "application/x-www-form-urlencoded"}
-                    )
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
             
-            # Access user profile
-            logger.info(f"Fetching profile for {target_username}...")
-            profile_url = f"https://www.thaifriendly.com/{target_username}"
-            profile_response = await http_client.get(profile_url, headers=headers)
+            # Set the session cookie
+            await context.add_cookies([{
+                "name": "PHPSESSID",
+                "value": session_cookie,
+                "domain": ".thaifriendly.com",
+                "path": "/"
+            }])
             
-            logger.info(f"Profile status: {profile_response.status_code}")
+            page = await context.new_page()
             
-            if profile_response.status_code == 404:
+            logger.info(f"Fetching profile for {target_username} with Playwright...")
+            
+            try:
+                await page.goto(f"https://www.thaifriendly.com/{target_username}", wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(3)  # Wait for dynamic content
+            except Exception as e:
+                logger.error(f"Navigation failed: {e}")
+                result["error"] = f"Failed to load profile: {str(e)}"
+                await browser.close()
+                return result
+            
+            # Get page text after JavaScript execution
+            page_text = await page.inner_text("body")
+            
+            logger.info(f"Page text preview: {page_text[:500]}")
+            
+            # Check if user not found or need login
+            page_text_lower = page_text.lower()
+            
+            if "join thaifriendly" in page_text_lower and target_username.lower() not in page_text_lower:
+                result["error"] = "Session expired - please get a new PHPSESSID cookie from your browser"
+                result["online_status"] = "Session expired"
+                await browser.close()
+                return result
+            
+            # Check if target username is on the page
+            if target_username.lower() not in page_text_lower:
                 result["user_exists"] = False
                 result["online_status"] = "User not found"
+                await browser.close()
                 return result
             
-            soup = BeautifulSoup(profile_response.text, 'html.parser')
-            page_text = soup.get_text()
+            result["user_exists"] = True
             
-            logger.info(f"Page text preview: {page_text[:300]}")
+            # Look for "Online now" or "Offline (X ago)" patterns
+            # ThaiFriendly format: "Offline (2 day ago)" or "Online"
             
-            # Check if we need to login (profile blocked)
-            if "join thaifriendly to see" in page_text.lower() or "looking for " in page_text.lower():
-                logger.warning("Profile blocked - not logged in")
-                result["error"] = "Not logged in - please provide your browser session cookie (PHPSESSID)"
-                result["online_status"] = "Login required"
+            # Check for "Online now" or just "Online" status
+            online_now_match = re.search(r'\b(online)\b(?!\s*\()', page_text_lower)
+            if online_now_match:
+                # Make sure it's the user's status, not just text
+                context_match = re.search(rf'{target_username.lower()}.*?\b(online)\b', page_text_lower, re.DOTALL)
+                if context_match:
+                    result["online_status"] = "Online now"
+                    result["is_currently_online"] = True
+                    last_checked = datetime.now(timezone.utc).isoformat()
+                    current_status_text = result["online_status"]
+                    await browser.close()
+                    return result
+            
+            # Check for "Offline (X day/hour/minute ago)"
+            offline_match = re.search(r'offline\s*\((\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)\)', page_text_lower)
+            if offline_match:
+                time_ago = offline_match.group(1)
+                result["online_status"] = f"Offline ({time_ago})"
+                result["is_currently_online"] = False
+                last_checked = datetime.now(timezone.utc).isoformat()
+                current_status_text = result["online_status"]
+                await browser.close()
                 return result
             
-            # Parse online status
-            status_result = parse_online_status(soup, page_text)
+            # Alternative: Look for "Last Active: X ago"
+            last_active_match = re.search(r'last\s*active[:\s]*(\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)', page_text_lower)
+            if last_active_match:
+                time_ago = last_active_match.group(1)
+                result["online_status"] = f"Last active {time_ago}"
+                result["is_currently_online"] = False
+                last_checked = datetime.now(timezone.utc).isoformat()
+                current_status_text = result["online_status"]
+                await browser.close()
+                return result
             
-            result["online_status"] = status_result["online_status"]
-            result["is_currently_online"] = status_result["is_currently_online"]
-            result["user_exists"] = status_result["user_exists"]
-            
+            # If we found the user but couldn't determine status
+            result["online_status"] = "Status unknown"
             last_checked = datetime.now(timezone.utc).isoformat()
             current_status_text = result["online_status"]
             
-            logger.info(f"Status check result: {result}")
+            await browser.close()
             return result
             
-    except httpx.TimeoutException:
-        logger.error("Request timed out")
-        result["error"] = "Request timed out"
-        return result
     except Exception as e:
         logger.error(f"Error checking ThaiFriendly status: {e}")
         result["error"] = str(e)
