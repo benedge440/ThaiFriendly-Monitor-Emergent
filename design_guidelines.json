@@ -1,0 +1,118 @@
+{
+  "design_philosophy": {
+    "identity": "The NetSentinel - A high-fidelity, cyberpunk monitoring dashboard. Precision, stealth, and data visibility.",
+    "emotional_tone": "Technological, Alert, Precise, Dark, Neon.",
+    "core_principles": [
+      "Data over decoration: Status is the hero.",
+      "Darkness is the canvas: Use deep blacks (#050505) to make neon pop.",
+      "Motion denotes life: Static is dead. Pulse, scan, and glitch to show activity.",
+      "Terminal aesthetics: Monospaced fonts for all data points."
+    ]
+  },
+  "typography": {
+    "font_family": {
+      "heading": "\"JetBrains Mono\", monospace",
+      "body": "\"Inter\", sans-serif",
+      "data": "\"JetBrains Mono\", monospace"
+    },
+    "scale": {
+      "hero_status": "text-6xl md:text-8xl font-bold tracking-tighter",
+      "section_header": "text-xl uppercase tracking-[0.2em] text-muted-foreground",
+      "log_entry": "text-sm md:text-base font-mono",
+      "label": "text-xs font-bold uppercase tracking-wider text-muted-foreground"
+    },
+    "imports": [
+      "@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600;900&display=swap');"
+    ]
+  },
+  "colors": {
+    "palette": {
+      "background": "#050505",
+      "surface": "#0A0A0A",
+      "surface_highlight": "#151515",
+      "border": "#262626",
+      "primary": "#00FF9C",
+      "primary_dim": "rgba(0, 255, 156, 0.1)",
+      "secondary": "#FF2E2E",
+      "secondary_dim": "rgba(255, 46, 46, 0.1)",
+      "accent": "#00F0FF",
+      "text_main": "#EDEDED",
+      "text_muted": "#888888"
+    },
+    "usage": {
+      "online_status": "text-[#00FF9C] drop-shadow-[0_0_10px_rgba(0,255,156,0.5)]",
+      "offline_status": "text-[#FF2E2E] drop-shadow-[0_0_10px_rgba(255,46,46,0.5)]",
+      "panel_border": "border border-white/10",
+      "neon_glow": "shadow-[0_0_20px_-5px_var(--tw-shadow-color)]"
+    }
+  },
+  "layout": {
+    "grid_structure": "Bento Grid (High Density)",
+    "spacing": "Generous padding (p-6 to p-8) inside containers, tight gaps (gap-4) between containers.",
+    "container_style": "Rounded-xl border border-white/10 bg-[#0A0A0A] relative overflow-hidden",
+    "breakpoints": {
+      "mobile": "Single column stack. Status Hero -> Controls -> History -> Settings",
+      "desktop": "Grid cols-12. Status (col-span-8), Controls (col-span-4), History (col-span-8), Settings (col-span-4)"
+    }
+  },
+  "components": {
+    "StatusHero": {
+      "description": "Massive indicator for current status.",
+      "style": "Flex center, pulsing radial gradient background. Text uses 'Glitch' effect on change.",
+      "props": ["status (online/offline)", "lastChecked"]
+    },
+    "TerminalLog": {
+      "description": "History of status changes.",
+      "style": "Monospace font. Green text for 'Came Online', Red for 'Went Offline', Grey for timestamp. Scrollable area with custom thin scrollbar.",
+      "animation": "New entries slide in from left."
+    },
+    "CyberButton": {
+      "description": "Main action buttons (Start/Stop/Refresh).",
+      "style": "Sharp edges or minimal rounded (rounded-sm). Hover: Background fill with neon color, text turns black. Active: Scale down 0.98.",
+      "variants": ["primary (Green)", "destructive (Red)", "outline (Grey)"]
+    },
+    "SettingsVault": {
+      "description": "Form for credentials.",
+      "style": "Input fields look like code blocks. Background #000000. Border-bottom only (1px solid #333). Focus: Border-bottom neon blue.",
+      "security": "Password fields must use type='password'. Toggle visibility icon required."
+    }
+  },
+  "visual_enhancers": {
+    "scanlines": "Overlay div with repeating linear gradient (transparent, rgba(0,0,0,0.5)) pointer-events-none z-50 opacity-20.",
+    "grid_bg": "CSS radial-gradient dots pattern #333 1px, transparent 1px. Size 20px 20px.",
+    "glass_panel": "backdrop-blur-md bg-black/40 border border-white/10"
+  },
+  "motion": {
+    "pulse_slow": "animate-pulse duration-[3000ms]",
+    "glitch_hover": "hover:translate-x-1 transition-transform duration-75",
+    "entry_stagger": "framer-motion staggered fade-in-up for list items"
+  },
+  "icons": {
+    "library": "lucide-react",
+    "mapping": {
+      "online": "Wifi / Activity",
+      "offline": "WifiOff / Slash",
+      "settings": "Settings / Shield",
+      "history": "Terminal / List",
+      "refresh": "RefreshCcw"
+    }
+  },
+  "testing": {
+    "attribute": "data-testid",
+    "rules": "All interactive elements (buttons, inputs) and dynamic text (status, timestamp) must have data-testid attributes (e.g., 'status-indicator', 'start-btn')."
+  },
+  "image_urls": {
+    "background_texture": "https://images.unsplash.com/photo-1646708198974-4c4893e8a2d7?crop=entropy&cs=srgb&fm=jpg&q=85"
+  },
+  "instructions_to_main_agent": [
+    "1. INSTALLATION: Run 'npm install lucide-react sonner framer-motion clsx tailwind-merge' (or yarn add).",
+    "2. SETUP: Add JetBrains Mono to index.html or import in CSS.",
+    "3. THEME: Force 'dark' class on the root html/body. This app is dark-mode only.",
+    "4. COMPONENTS: Build 'ui/card.js', 'ui/button.js', 'ui/input.js', 'ui/badge.js' using the Cyberpunk aesthetic (no default white cards).",
+    "5. LAYOUT: Create a Dashboard layout with a Sidebar (desktop) or Bottom Nav (mobile) OR a simple Single-Page-App with Tabs.",
+    "6. NOTIFICATIONS: Use 'sonner' for in-app toasts when status changes or settings save.",
+    "7. DATA: Mock the WebSocket/Polling connection in the frontend until backend is ready. Use a context provider for 'StatusContext'.",
+    "8. CRITICAL: Ensure the 'Settings' inputs for credentials are visually distinct and feel secure (padlock icons, masked text).",
+    "9. Universal Guidelines: Follow the <UNIVERSAL GUIDELINES FOR MAIN AGENT> provided in the prompt."
+  ]
+}
