@@ -37,17 +37,20 @@ const API = `${BACKEND_URL}/api`;
 const StatusHero = ({ statusText, lastChecked, targetUsername, isMonitoring, isCurrentlyOnline, userExists }) => {
   // Determine display based on status
   const getStatusDisplay = () => {
-    if (!statusText || statusText === "Unknown") {
-      return { text: "UNKNOWN", class: "text-[#888888]", pulseClass: "" };
+    if (!statusText || statusText === "Unknown" || statusText === "Status unknown") {
+      return { text: "UNKNOWN", class: "text-[#888888]", pulseClass: "", warning: null };
+    }
+    if (statusText === "Session expired" || statusText === "Login required") {
+      return { text: "SESSION EXPIRED", class: "text-[#FF9500]", pulseClass: "", warning: "Please refresh your PHPSESSID cookie" };
     }
     if (!userExists || statusText === "User not found") {
-      return { text: "USER NOT FOUND", class: "text-[#888888]", pulseClass: "" };
+      return { text: "USER NOT FOUND", class: "text-[#888888]", pulseClass: "", warning: null };
     }
     if (isCurrentlyOnline || statusText.toLowerCase() === "online now") {
-      return { text: "ONLINE NOW", class: "text-[#00FF9C] glow-green", pulseClass: "animate-pulse-green" };
+      return { text: "ONLINE NOW", class: "text-[#00FF9C] glow-green", pulseClass: "animate-pulse-green", warning: null };
     }
-    // Show the actual status text (e.g., "Online 2 days ago")
-    return { text: statusText.toUpperCase(), class: "text-[#00F0FF] glow-cyan", pulseClass: "" };
+    // Show the actual status text (e.g., "Offline (2 day ago)")
+    return { text: statusText.toUpperCase(), class: "text-[#00F0FF] glow-cyan", pulseClass: "", warning: null };
   };
 
   const display = getStatusDisplay();
@@ -80,6 +83,11 @@ const StatusHero = ({ statusText, lastChecked, targetUsername, isMonitoring, isC
         <p className="mt-6 text-sm text-[#888888] font-mono" data-testid="last-checked">
           {lastChecked ? `Last checked: ${new Date(lastChecked).toLocaleString()}` : "Not checked yet"}
         </p>
+        {display.warning && (
+          <p className="mt-3 text-xs text-[#FF9500] font-mono animate-pulse">
+            ⚠️ {display.warning}
+          </p>
+        )}
       </div>
     </motion.div>
   );

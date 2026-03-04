@@ -296,6 +296,13 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
                 await browser.close()
                 return result
             
+            # Check for explicit "user deleted/does not exist/blocked" message
+            if "this user has been deleted" in page_text_lower or "this profile does not exist" in page_text_lower or "has blocked you" in page_text_lower:
+                result["user_exists"] = False
+                result["online_status"] = "User not found"
+                await browser.close()
+                return result
+            
             # Check if target username is on the page
             if target_username.lower() not in page_text_lower:
                 result["user_exists"] = False
@@ -393,23 +400,52 @@ async def perform_status_check():
         
         if status_result.get("error"):
             logger.error(f"Failed to check status: {status_result['error']}")
+            # Record the error/unknown status in history
+            history_entry = {
+                "id": str(uuid.uuid4()),
+                "target_username": target_username,
+                "online_status": status_result.get("online_status", "Error"),
+                "is_currently_online": False,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "status_changed": previous_status != status_result.get("online_status", "Error"),
+                "user_exists": False,
+                "error_message": status_result['error']
+            }
+            await db.status_history.insert_one(history_entry)
+            
             # Broadcast error
             await broadcast_status({
-                "type": "error",
-                "message": status_result['error'],
-                "target_username": target_username
+                "type": "status_update",
+                "online_status": status_result.get("online_status", "Error"),
+                "is_currently_online": False,
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "status_changed": history_entry["status_changed"],
+                "target_username": target_username,
+                "user_exists": False,
+                "error": status_result['error']
             })
             return
         
-        # Don't record if user doesn't exist
+        # Record "User not found" in history as well
         if not status_result["user_exists"]:
-            logger.info(f"User {target_username} not found, not recording")
+            logger.info(f"User {target_username} not found, recording to history")
+            history_entry = {
+                "id": str(uuid.uuid4()),
+                "target_username": target_username,
+                "online_status": "User not found",
+                "is_currently_online": False,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "status_changed": previous_status != "User not found",
+                "user_exists": False
+            }
+            await db.status_history.insert_one(history_entry)
+            
             await broadcast_status({
                 "type": "status_update",
                 "online_status": "User not found",
                 "is_currently_online": False,
-                "last_checked": last_checked,
-                "status_changed": False,
+                "last_checked": datetime.now(timezone.utc).isoformat(),
+                "status_changed": history_entry["status_changed"],
                 "target_username": target_username,
                 "user_exists": False
             })
