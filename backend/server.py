@@ -62,7 +62,8 @@ class Settings(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     thaifriendly_email: str = ""
     thaifriendly_password_encrypted: str = ""
-    target_username: str = "MayimeTH"
+    target_username: str = "MayimeTH"  # Keep for backward compat
+    target_usernames: List[str] = Field(default_factory=lambda: ["MayimeTH"])
     notification_email: str = ""
     check_interval_minutes: int = 10
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -71,7 +72,8 @@ class Settings(BaseModel):
 class SettingsUpdate(BaseModel):
     thaifriendly_email: Optional[str] = None
     thaifriendly_password: Optional[str] = None
-    target_username: Optional[str] = None
+    target_username: Optional[str] = None  # Keep for backward compat
+    target_usernames: Optional[List[str]] = None
     notification_email: Optional[str] = None
     check_interval_minutes: Optional[int] = None
     session_cookie: Optional[str] = None  # PHPSESSID cookie from browser
@@ -80,7 +82,8 @@ class SettingsResponse(BaseModel):
     id: str
     thaifriendly_email: str
     has_password: bool
-    target_username: str
+    target_username: str  # Primary/first username for backward compat
+    target_usernames: List[str] = []
     notification_email: str
     check_interval_minutes: int
     has_session_cookie: bool = False
@@ -363,8 +366,123 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
         result["error"] = str(e)
         return result
 
+async def check_single_user(session_cookie: str, target_username: str, notification_email: str, email: str = "", password: str = ""):
+    """Check status for a single user and record to history"""
+    global current_status_text, last_checked
+    
+    # Get previous status for this user
+    last_history = await db.status_history.find_one(
+        {"target_username": target_username},
+        {"_id": 0},
+        sort=[("checked_at", -1)]
+    )
+    previous_status = last_history.get('online_status') if last_history else None
+    previous_is_online = last_history.get('is_currently_online', False) if last_history else False
+    
+    # Check current status
+    status_result = await check_thaifriendly_status(email, password, target_username, session_cookie)
+    
+    checked_at = datetime.now(timezone.utc).isoformat()
+    
+    if status_result.get("error"):
+        logger.error(f"Failed to check status for {target_username}: {status_result['error']}")
+        history_entry = {
+            "id": str(uuid.uuid4()),
+            "target_username": target_username,
+            "online_status": status_result.get("online_status", "Error"),
+            "is_currently_online": False,
+            "checked_at": checked_at,
+            "status_changed": previous_status != status_result.get("online_status", "Error"),
+            "user_exists": False,
+            "error_message": status_result['error']
+        }
+        await db.status_history.insert_one(history_entry)
+        
+        await broadcast_status({
+            "type": "status_update",
+            "online_status": status_result.get("online_status", "Error"),
+            "is_currently_online": False,
+            "last_checked": checked_at,
+            "status_changed": history_entry["status_changed"],
+            "target_username": target_username,
+            "user_exists": False,
+            "error": status_result['error']
+        })
+        return
+    
+    if not status_result["user_exists"]:
+        logger.info(f"User {target_username} not found, recording to history")
+        history_entry = {
+            "id": str(uuid.uuid4()),
+            "target_username": target_username,
+            "online_status": "User not found",
+            "is_currently_online": False,
+            "checked_at": checked_at,
+            "status_changed": previous_status != "User not found",
+            "user_exists": False
+        }
+        await db.status_history.insert_one(history_entry)
+        
+        await broadcast_status({
+            "type": "status_update",
+            "online_status": "User not found",
+            "is_currently_online": False,
+            "last_checked": checked_at,
+            "status_changed": history_entry["status_changed"],
+            "target_username": target_username,
+            "user_exists": False
+        })
+        return
+    
+    # Determine if status changed
+    status_changed = previous_status != status_result["online_status"]
+    became_online = not previous_is_online and status_result["is_currently_online"]
+    
+    # Save to history
+    history_entry = {
+        "id": str(uuid.uuid4()),
+        "target_username": target_username,
+        "online_status": status_result["online_status"],
+        "is_currently_online": status_result["is_currently_online"],
+        "checked_at": checked_at,
+        "status_changed": status_changed,
+        "user_exists": True
+    }
+    await db.status_history.insert_one(history_entry)
+    
+    # Update global status for the most recent check
+    last_checked = checked_at
+    current_status_text = status_result["online_status"]
+    
+    # Broadcast to websockets
+    await broadcast_status({
+        "type": "status_update",
+        "online_status": status_result["online_status"],
+        "is_currently_online": status_result["is_currently_online"],
+        "last_checked": checked_at,
+        "status_changed": status_changed,
+        "target_username": target_username,
+        "user_exists": True
+    })
+    
+    # Send notification if user came online NOW
+    if became_online and notification_email:
+        await send_email_notification(
+            status_result["online_status"],
+            target_username,
+            notification_email,
+            True
+        )
+        await broadcast_status({
+            "type": "notification",
+            "message": f"{target_username} is now ONLINE!",
+            "is_currently_online": True
+        })
+    
+    logger.info(f"Status check complete: {target_username} - {status_result['online_status']}")
+
 async def perform_status_check():
-    """Perform a status check and handle notifications"""
+    """Perform status check for all target usernames"""
     global current_status_text, last_checked
     
     try:
@@ -373,7 +491,6 @@ async def perform_status_check():
             logger.warning("No settings configured, skipping check")
             return
         
-        # Check for session cookie first, then credentials
         session_cookie = settings_doc.get('session_cookie')
         email = settings_doc.get('thaifriendly_email', '')
         password_encrypted = settings_doc.get('thaifriendly_password_encrypted', '')
@@ -383,116 +500,28 @@ async def perform_status_check():
             return
         
         password = decrypt_password(password_encrypted) if password_encrypted else ''
-        target_username = settings_doc.get('target_username', 'MayimeTH')
         notification_email = settings_doc.get('notification_email', '')
         
-        # Get previous status
-        last_history = await db.status_history.find_one(
-            {"target_username": target_username},
-            {"_id": 0},
-            sort=[("checked_at", -1)]
-        )
-        previous_status = last_history.get('online_status') if last_history else None
-        previous_is_online = last_history.get('is_currently_online', False) if last_history else False
+        # Get list of target usernames (support both old single and new multiple)
+        target_usernames = settings_doc.get('target_usernames', [])
+        if not target_usernames:
+            # Fallback to single username for backward compatibility
+            single_username = settings_doc.get('target_username', 'MayimeTH')
+            if single_username:
+                target_usernames = [single_username]
         
-        # Check current status
-        status_result = await check_thaifriendly_status(email, password, target_username, session_cookie)
-        
-        if status_result.get("error"):
-            logger.error(f"Failed to check status: {status_result['error']}")
-            # Record the error/unknown status in history
-            history_entry = {
-                "id": str(uuid.uuid4()),
-                "target_username": target_username,
-                "online_status": status_result.get("online_status", "Error"),
-                "is_currently_online": False,
-                "checked_at": datetime.now(timezone.utc).isoformat(),
-                "status_changed": previous_status != status_result.get("online_status", "Error"),
-                "user_exists": False,
-                "error_message": status_result['error']
-            }
-            await db.status_history.insert_one(history_entry)
-            
-            # Broadcast error
-            await broadcast_status({
-                "type": "status_update",
-                "online_status": status_result.get("online_status", "Error"),
-                "is_currently_online": False,
-                "last_checked": datetime.now(timezone.utc).isoformat(),
-                "status_changed": history_entry["status_changed"],
-                "target_username": target_username,
-                "user_exists": False,
-                "error": status_result['error']
-            })
+        if not target_usernames:
+            logger.warning("No target usernames configured, skipping check")
             return
         
-        # Record "User not found" in history as well
-        if not status_result["user_exists"]:
-            logger.info(f"User {target_username} not found, recording to history")
-            history_entry = {
-                "id": str(uuid.uuid4()),
-                "target_username": target_username,
-                "online_status": "User not found",
-                "is_currently_online": False,
-                "checked_at": datetime.now(timezone.utc).isoformat(),
-                "status_changed": previous_status != "User not found",
-                "user_exists": False
-            }
-            await db.status_history.insert_one(history_entry)
-            
-            await broadcast_status({
-                "type": "status_update",
-                "online_status": "User not found",
-                "is_currently_online": False,
-                "last_checked": datetime.now(timezone.utc).isoformat(),
-                "status_changed": history_entry["status_changed"],
-                "target_username": target_username,
-                "user_exists": False
-            })
-            return
+        logger.info(f"Checking {len(target_usernames)} user(s): {target_usernames}")
         
-        # Determine if status changed
-        status_changed = previous_status != status_result["online_status"]
-        became_online = not previous_is_online and status_result["is_currently_online"]
-        
-        # Save to history
-        history_entry = {
-            "id": str(uuid.uuid4()),
-            "target_username": target_username,
-            "online_status": status_result["online_status"],
-            "is_currently_online": status_result["is_currently_online"],
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "status_changed": status_changed,
-            "user_exists": True
-        }
-        await db.status_history.insert_one(history_entry)
-        
-        # Broadcast to websockets
-        await broadcast_status({
-            "type": "status_update",
-            "online_status": status_result["online_status"],
-            "is_currently_online": status_result["is_currently_online"],
-            "last_checked": last_checked,
-            "status_changed": status_changed,
-            "target_username": target_username,
-            "user_exists": True
-        })
-        
-        # Send notification if user came online NOW
-        if became_online:
-            await send_email_notification(
-                status_result["online_status"],
-                target_username,
-                notification_email,
-                True
-            )
-            await broadcast_status({
-                "type": "notification",
-                "message": f"{target_username} is now ONLINE!",
-                "is_currently_online": True
-            })
-        
-        logger.info(f"Status check complete: {target_username} - {status_result['online_status']}")
+        # Check each user
+        for username in target_usernames:
+            await check_single_user(session_cookie, username, notification_email, email, password)
+            # Small delay between checks to avoid rate limiting
+            if len(target_usernames) > 1:
+                await asyncio.sleep(2)
         
     except Exception as e:
         logger.error(f"Error in status check: {e}")
@@ -513,11 +542,19 @@ async def get_settings():
         await db.settings.insert_one(doc)
         settings_doc = doc
     
+    # Get target usernames, falling back to single username for backward compat
+    target_usernames = settings_doc.get('target_usernames', [])
+    if not target_usernames:
+        single = settings_doc.get('target_username', 'MayimeTH')
+        if single:
+            target_usernames = [single]
+    
     return SettingsResponse(
         id=settings_doc.get('id', ''),
         thaifriendly_email=settings_doc.get('thaifriendly_email', ''),
         has_password=bool(settings_doc.get('thaifriendly_password_encrypted')),
-        target_username=settings_doc.get('target_username', 'MayimeTH'),
+        target_username=target_usernames[0] if target_usernames else 'MayimeTH',
+        target_usernames=target_usernames,
         notification_email=settings_doc.get('notification_email', ''),
         check_interval_minutes=settings_doc.get('check_interval_minutes', 10),
         has_session_cookie=bool(settings_doc.get('session_cookie'))
@@ -535,6 +572,12 @@ async def update_settings(settings: SettingsUpdate):
     
     if settings.target_username is not None:
         update_data['target_username'] = settings.target_username
+    
+    if settings.target_usernames is not None:
+        update_data['target_usernames'] = settings.target_usernames
+        # Also update single username for backward compat
+        if settings.target_usernames:
+            update_data['target_username'] = settings.target_usernames[0]
     
     if settings.notification_email is not None:
         update_data['notification_email'] = settings.notification_email

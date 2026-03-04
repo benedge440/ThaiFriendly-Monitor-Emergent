@@ -34,7 +34,7 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 // Status Hero Component - Now shows status text instead of just ONLINE/OFFLINE
-const StatusHero = ({ statusText, lastChecked, targetUsername, isMonitoring, isCurrentlyOnline, userExists }) => {
+const StatusHero = ({ statusText, lastChecked, targetUsernames, isMonitoring, isCurrentlyOnline, userExists }) => {
   // Determine display based on status
   const getStatusDisplay = () => {
     if (!statusText || statusText === "Unknown" || statusText === "Status unknown") {
@@ -54,6 +54,7 @@ const StatusHero = ({ statusText, lastChecked, targetUsername, isMonitoring, isC
   };
 
   const display = getStatusDisplay();
+  const userCount = targetUsernames?.length || 0;
   
   return (
     <motion.div 
@@ -69,7 +70,11 @@ const StatusHero = ({ statusText, lastChecked, targetUsername, isMonitoring, isC
           {isMonitoring ? "MONITORING ACTIVE" : "MONITORING PAUSED"}
         </p>
         <p className="text-sm md:text-base font-mono text-[#00F0FF] mb-4" data-testid="target-username">
-          TARGET: {targetUsername}
+          {userCount > 1 ? (
+            <span>TRACKING {userCount} USERS</span>
+          ) : (
+            <span>TARGET: {targetUsernames?.[0] || 'None'}</span>
+          )}
         </p>
         <motion.h1 
           className={`text-3xl md:text-5xl lg:text-6xl font-bold font-mono ${display.class} glitch-text`}
@@ -318,11 +323,12 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
   const [formData, setFormData] = useState({
     thaifriendly_email: '',
     thaifriendly_password: '',
-    target_username: 'MayimeTH',
+    target_usernames: ['MayimeTH'],
     notification_email: '',
     check_interval_minutes: 10,
     session_cookie: ''
   });
+  const [newUsername, setNewUsername] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
@@ -331,7 +337,9 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
       setFormData(prev => ({
         ...prev,
         thaifriendly_email: settings.thaifriendly_email || '',
-        target_username: settings.target_username || 'MayimeTH',
+        target_usernames: settings.target_usernames?.length > 0 
+          ? settings.target_usernames 
+          : [settings.target_username || 'MayimeTH'],
         notification_email: settings.notification_email || '',
         check_interval_minutes: settings.check_interval_minutes || 10
       }));
@@ -347,6 +355,24 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     onSave(formData);
+  };
+
+  const addUsername = () => {
+    const trimmed = newUsername.trim();
+    if (trimmed && !formData.target_usernames.includes(trimmed)) {
+      setFormData(prev => ({
+        ...prev,
+        target_usernames: [...prev.target_usernames, trimmed]
+      }));
+      setNewUsername('');
+    }
+  };
+
+  const removeUsername = (usernameToRemove) => {
+    setFormData(prev => ({
+      ...prev,
+      target_usernames: prev.target_usernames.filter(u => u !== usernameToRemove)
+    }));
   };
 
   const requestNotificationPermission = async () => {
@@ -406,18 +432,56 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
           </div>
         </div>
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           <Label className="text-xs uppercase tracking-wider text-[#888888]">
-            Target Username
+            Target Usernames ({formData.target_usernames.length})
           </Label>
-          <Input
-            type="text"
-            value={formData.target_username}
-            onChange={(e) => setFormData(prev => ({ ...prev, target_username: e.target.value }))}
-            placeholder="MayimeTH"
-            className="bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono"
-            data-testid="target-username-input"
-          />
+          
+          {/* Current usernames list */}
+          <div className="space-y-2 max-h-32 overflow-y-auto">
+            {formData.target_usernames.map((username, idx) => (
+              <div 
+                key={username} 
+                className="flex items-center justify-between bg-[#0A0A0A] border border-[#262626] rounded px-3 py-2"
+              >
+                <span className="text-sm font-mono text-[#00F0FF]">
+                  <User className="w-3 h-3 inline mr-2" />
+                  {username}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeUsername(username)}
+                  className="text-[#888888] hover:text-[#FF2E2E] transition-colors"
+                  data-testid={`remove-username-${idx}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+          
+          {/* Add new username */}
+          <div className="flex gap-2">
+            <Input
+              type="text"
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addUsername())}
+              placeholder="Add username..."
+              className="flex-1 bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono text-sm h-9"
+              data-testid="new-username-input"
+            />
+            <Button
+              type="button"
+              onClick={addUsername}
+              variant="outline"
+              size="sm"
+              className="border-[#262626] hover:border-[#00FF9C] hover:text-[#00FF9C] h-9 px-3"
+              data-testid="add-username-btn"
+            >
+              + Add
+            </Button>
+          </div>
         </div>
 
         <div className="space-y-2">
@@ -511,6 +575,7 @@ function App() {
     is_currently_online: false,
     last_checked: null,
     target_username: 'MayimeTH',
+    target_usernames: ['MayimeTH'],
     user_exists: true
   });
   const [isLoading, setIsLoading] = useState(false);
@@ -542,7 +607,13 @@ function App() {
   const fetchMonitoringStatus = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/monitoring/status`);
-      setMonitoringStatus(response.data);
+      // Also get settings to get target_usernames
+      const settingsResponse = await axios.get(`${API}/settings`);
+      setMonitoringStatus(prev => ({
+        ...prev,
+        ...response.data,
+        target_usernames: settingsResponse.data.target_usernames || [settingsResponse.data.target_username]
+      }));
     } catch (error) {
       console.error('Failed to fetch monitoring status:', error);
     }
@@ -758,7 +829,7 @@ function App() {
               <StatusHero 
                 statusText={monitoringStatus.current_status}
                 lastChecked={monitoringStatus.last_checked}
-                targetUsername={monitoringStatus.target_username}
+                targetUsernames={monitoringStatus.target_usernames}
                 isMonitoring={monitoringStatus.is_monitoring}
                 isCurrentlyOnline={monitoringStatus.is_currently_online}
                 userExists={monitoringStatus.user_exists}
@@ -791,7 +862,7 @@ function App() {
             <StatusHero 
               statusText={monitoringStatus.current_status}
               lastChecked={monitoringStatus.last_checked}
-              targetUsername={monitoringStatus.target_username}
+              targetUsernames={monitoringStatus.target_usernames}
               isMonitoring={monitoringStatus.is_monitoring}
               isCurrentlyOnline={monitoringStatus.is_currently_online}
               userExists={monitoringStatus.user_exists}
