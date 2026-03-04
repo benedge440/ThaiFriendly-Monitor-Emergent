@@ -33,32 +33,36 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Status Hero Component - Now shows status text instead of just ONLINE/OFFLINE
-const StatusHero = ({ statusText, lastChecked, targetUsernames, isMonitoring, isCurrentlyOnline, userExists }) => {
-  // Determine display based on status
-  const getStatusDisplay = () => {
-    if (!statusText || statusText === "Unknown" || statusText === "Status unknown") {
-      return { text: "UNKNOWN", class: "text-[#888888]", pulseClass: "", warning: null };
+// Status Hero Component - Shows status for each tracked user
+const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring }) => {
+  const userCount = targetUsernames?.length || 0;
+  
+  // Helper to get display properties for a status
+  const getStatusStyle = (status) => {
+    if (!status || status === "Unknown" || status === "Status unknown") {
+      return { color: "text-[#888888]", icon: Clock };
     }
-    if (statusText === "Session expired" || statusText === "Login required") {
-      return { text: "SESSION EXPIRED", class: "text-[#FF9500]", pulseClass: "", warning: "Please refresh your PHPSESSID cookie" };
+    if (status === "Session expired" || status === "Login required") {
+      return { color: "text-[#FF9500]", icon: WifiOff };
     }
-    if (!userExists || statusText === "User not found") {
-      return { text: "USER NOT FOUND", class: "text-[#888888]", pulseClass: "", warning: null };
+    if (status === "User not found") {
+      return { color: "text-[#888888]", icon: UserX };
     }
-    if (isCurrentlyOnline || statusText.toLowerCase() === "online now") {
-      return { text: "ONLINE NOW", class: "text-[#00FF9C] glow-green", pulseClass: "animate-pulse-green", warning: null };
+    if (status.toLowerCase() === "online now") {
+      return { color: "text-[#00FF9C]", icon: Activity, pulse: true };
     }
-    // Show the actual status text (e.g., "Offline (2 day ago)")
-    return { text: statusText.toUpperCase(), class: "text-[#00F0FF] glow-cyan", pulseClass: "", warning: null };
+    // Offline with time
+    return { color: "text-[#FF2E2E]", icon: WifiOff };
   };
 
-  const display = getStatusDisplay();
-  const userCount = targetUsernames?.length || 0;
+  // Check if any user is online
+  const anyOnline = userStatuses && Object.values(userStatuses).some(
+    s => s?.status?.toLowerCase() === "online now"
+  );
   
   return (
     <motion.div 
-      className={`cyber-panel p-8 md:p-12 text-center relative ${display.pulseClass}`}
+      className={`cyber-panel p-6 md:p-8 relative ${anyOnline ? 'animate-pulse-green' : ''}`}
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.5 }}
@@ -66,33 +70,57 @@ const StatusHero = ({ statusText, lastChecked, targetUsernames, isMonitoring, is
     >
       <div className="absolute inset-0 grid-bg opacity-30" />
       <div className="relative z-10">
-        <p className="text-xs uppercase tracking-[0.3em] text-[#888888] mb-2 font-mono" data-testid="monitoring-label">
-          {isMonitoring ? "MONITORING ACTIVE" : "MONITORING PAUSED"}
-        </p>
-        <p className="text-sm md:text-base font-mono text-[#00F0FF] mb-4" data-testid="target-username">
-          {userCount > 1 ? (
-            <span>TRACKING {userCount} USERS</span>
-          ) : (
-            <span>TARGET: {targetUsernames?.[0] || 'None'}</span>
-          )}
-        </p>
-        <motion.h1 
-          className={`text-3xl md:text-5xl lg:text-6xl font-bold font-mono ${display.class} glitch-text`}
-          key={display.text}
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          data-testid="status-indicator"
-        >
-          [ {display.text} ]
-        </motion.h1>
-        <p className="mt-6 text-sm text-[#888888] font-mono" data-testid="last-checked">
+        {/* Header */}
+        <div className="text-center mb-6">
+          <p className="text-xs uppercase tracking-[0.3em] text-[#888888] mb-2 font-mono" data-testid="monitoring-label">
+            {isMonitoring ? "MONITORING ACTIVE" : "MONITORING PAUSED"}
+          </p>
+          <p className="text-sm font-mono text-[#00F0FF]" data-testid="user-count">
+            TRACKING {userCount} USER{userCount !== 1 ? 'S' : ''}
+          </p>
+        </div>
+
+        {/* User Status Grid */}
+        {userCount > 0 ? (
+          <div className={`grid gap-3 ${userCount === 1 ? 'grid-cols-1' : userCount === 2 ? 'grid-cols-2' : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'}`}>
+            {targetUsernames.map((username) => {
+              const userStatus = userStatuses?.[username];
+              const status = userStatus?.status || "Unknown";
+              const style = getStatusStyle(status);
+              const StatusIcon = style.icon;
+              
+              return (
+                <motion.div
+                  key={username}
+                  className={`bg-[#0A0A0A] border border-[#262626] rounded-lg p-4 ${style.pulse ? 'shadow-neon-green' : ''}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  data-testid={`user-status-${username}`}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <User className="w-4 h-4 text-[#00F0FF]" />
+                    <span className="font-mono text-sm text-[#00F0FF] truncate">{username}</span>
+                  </div>
+                  <div className={`flex items-center gap-2 ${style.color}`}>
+                    <StatusIcon className={`w-5 h-5 ${style.pulse ? 'animate-pulse' : ''}`} />
+                    <span className="font-mono text-sm font-bold uppercase">
+                      {status}
+                    </span>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-center py-8">
+            <p className="text-[#888888] font-mono">No users configured</p>
+          </div>
+        )}
+
+        {/* Last Checked */}
+        <p className="mt-6 text-center text-xs text-[#888888] font-mono" data-testid="last-checked">
           {lastChecked ? `Last checked: ${new Date(lastChecked).toLocaleString()}` : "Not checked yet"}
         </p>
-        {display.warning && (
-          <p className="mt-3 text-xs text-[#FF9500] font-mono animate-pulse">
-            ⚠️ {display.warning}
-          </p>
-        )}
       </div>
     </motion.div>
   );
@@ -569,14 +597,11 @@ const SettingsPanel = ({ settings, onSave, isSaving }) => {
 function App() {
   const [settings, setSettings] = useState(null);
   const [history, setHistory] = useState([]);
+  const [userStatuses, setUserStatuses] = useState({});  // Per-user status tracking
   const [monitoringStatus, setMonitoringStatus] = useState({
     is_monitoring: false,
-    current_status: null,
-    is_currently_online: false,
     last_checked: null,
-    target_username: 'MayimeTH',
-    target_usernames: ['MayimeTH'],
-    user_exists: true
+    target_usernames: []
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -588,16 +613,44 @@ function App() {
     try {
       const response = await axios.get(`${API}/settings`);
       setSettings(response.data);
+      // Update target usernames in monitoring status
+      setMonitoringStatus(prev => ({
+        ...prev,
+        target_usernames: response.data.target_usernames || [response.data.target_username]
+      }));
     } catch (error) {
       console.error('Failed to fetch settings:', error);
     }
   }, []);
 
-  // Fetch history
+  // Fetch history and derive per-user statuses
   const fetchHistory = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/history`);
       setHistory(response.data);
+      
+      // Derive per-user statuses from history (most recent status per user)
+      const statuses = {};
+      response.data.forEach(entry => {
+        const username = entry.target_username;
+        if (username && !statuses[username]) {
+          statuses[username] = {
+            status: entry.online_status,
+            is_online: entry.is_currently_online,
+            checked_at: entry.checked_at,
+            user_exists: entry.user_exists
+          };
+        }
+      });
+      setUserStatuses(statuses);
+      
+      // Update last_checked from most recent entry
+      if (response.data.length > 0) {
+        setMonitoringStatus(prev => ({
+          ...prev,
+          last_checked: response.data[0].checked_at
+        }));
+      }
     } catch (error) {
       console.error('Failed to fetch history:', error);
     }
@@ -607,12 +660,10 @@ function App() {
   const fetchMonitoringStatus = useCallback(async () => {
     try {
       const response = await axios.get(`${API}/monitoring/status`);
-      // Also get settings to get target_usernames
-      const settingsResponse = await axios.get(`${API}/settings`);
       setMonitoringStatus(prev => ({
         ...prev,
-        ...response.data,
-        target_usernames: settingsResponse.data.target_usernames || [settingsResponse.data.target_username]
+        is_monitoring: response.data.is_monitoring,
+        last_checked: response.data.last_checked || prev.last_checked
       }));
     } catch (error) {
       console.error('Failed to fetch monitoring status:', error);
@@ -634,14 +685,24 @@ function App() {
         const data = JSON.parse(event.data);
         
         if (data.type === 'status_update') {
+          // Update per-user status
+          if (data.target_username) {
+            setUserStatuses(prev => ({
+              ...prev,
+              [data.target_username]: {
+                status: data.online_status,
+                is_online: data.is_currently_online,
+                checked_at: data.last_checked,
+                user_exists: data.user_exists
+              }
+            }));
+          }
+          
           setMonitoringStatus(prev => ({
             ...prev,
-            current_status: data.online_status,
-            is_currently_online: data.is_currently_online,
-            last_checked: data.last_checked,
-            target_username: data.target_username,
-            user_exists: data.user_exists
+            last_checked: data.last_checked
           }));
+          
           fetchHistory();
           
           // Show toast for status change
@@ -673,7 +734,6 @@ function App() {
           setMonitoringStatus(prev => ({
             ...prev,
             is_monitoring: data.is_monitoring,
-            current_status: data.current_status,
             last_checked: data.last_checked
           }));
         }
@@ -827,12 +887,10 @@ function App() {
             </TabsList>
             <TabsContent value="status" className="mt-4 space-y-4">
               <StatusHero 
-                statusText={monitoringStatus.current_status}
+                userStatuses={userStatuses}
                 lastChecked={monitoringStatus.last_checked}
                 targetUsernames={monitoringStatus.target_usernames}
                 isMonitoring={monitoringStatus.is_monitoring}
-                isCurrentlyOnline={monitoringStatus.is_currently_online}
-                userExists={monitoringStatus.user_exists}
               />
               <ControlPanel 
                 isMonitoring={monitoringStatus.is_monitoring}
@@ -860,12 +918,10 @@ function App() {
           {/* Status Hero - Large */}
           <div className="col-span-8">
             <StatusHero 
-              statusText={monitoringStatus.current_status}
+              userStatuses={userStatuses}
               lastChecked={monitoringStatus.last_checked}
               targetUsernames={monitoringStatus.target_usernames}
               isMonitoring={monitoringStatus.is_monitoring}
-              isCurrentlyOnline={monitoringStatus.is_currently_online}
-              userExists={monitoringStatus.user_exists}
             />
           </div>
           
