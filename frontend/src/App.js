@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import "@/App.css";
 import axios from "axios";
 import { Toaster, toast } from "sonner";
@@ -18,13 +18,17 @@ import {
   Bell,
   BellOff,
   UserX,
-  Clock
+  Clock,
+  Search,
+  Filter,
+  User
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -126,10 +130,54 @@ const ControlPanel = ({ isMonitoring, onStart, onStop, onRefresh, isLoading }) =
   );
 };
 
-// History Log Component - Updated to show status text
+// History Log Component - Enhanced with filtering, search, and username display
 const HistoryLog = ({ history, onClear }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  
+  // Get unique usernames from history for reference
+  const uniqueUsernames = useMemo(() => {
+    const usernames = new Set(history.map(h => h.target_username).filter(Boolean));
+    return Array.from(usernames);
+  }, [history]);
+  
+  // Filter and search history
+  const filteredHistory = useMemo(() => {
+    return history.filter(entry => {
+      // Search filter - by username
+      const matchesSearch = searchQuery === '' || 
+        entry.target_username?.toLowerCase().includes(searchQuery.toLowerCase());
+      
+      // Status filter
+      let matchesStatus = true;
+      if (statusFilter !== 'all') {
+        const status = entry.online_status?.toLowerCase() || '';
+        const isOnline = entry.is_currently_online || status === 'online now';
+        const isOffline = status.includes('offline');
+        const isUnknown = status === 'unknown' || status === 'status unknown';
+        
+        switch (statusFilter) {
+          case 'online':
+            matchesStatus = isOnline;
+            break;
+          case 'offline':
+            matchesStatus = isOffline;
+            break;
+          case 'unknown':
+            matchesStatus = isUnknown;
+            break;
+          default:
+            matchesStatus = true;
+        }
+      }
+      
+      return matchesSearch && matchesStatus;
+    });
+  }, [history, searchQuery, statusFilter]);
+  
   return (
     <div className="cyber-panel p-6 flex flex-col h-full" data-testid="history-panel">
+      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm uppercase tracking-[0.2em] text-[#888888] font-mono flex items-center gap-2">
           <Terminal className="w-4 h-4" />
@@ -145,18 +193,63 @@ const HistoryLog = ({ history, onClear }) => {
           <Trash2 className="w-4 h-4" />
         </Button>
       </div>
-      <ScrollArea className="flex-1 min-h-[300px] max-h-[400px]">
+      
+      {/* Search and Filter Controls */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        {/* Search Bar */}
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#888888]" />
+          <Input
+            type="text"
+            placeholder="Search username..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 bg-black border-0 border-b border-[#262626] rounded-none focus:border-[#00F0FF] font-mono text-sm h-9"
+            data-testid="history-search-input"
+          />
+        </div>
+        
+        {/* Status Filter */}
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger 
+            className="w-full sm:w-[140px] bg-black border-[#262626] font-mono text-sm h-9"
+            data-testid="status-filter-select"
+          >
+            <Filter className="w-3 h-3 mr-2 text-[#888888]" />
+            <SelectValue placeholder="Filter" />
+          </SelectTrigger>
+          <SelectContent className="bg-[#0A0A0A] border-[#262626]">
+            <SelectItem value="all" className="font-mono text-sm">All Status</SelectItem>
+            <SelectItem value="online" className="font-mono text-sm text-[#00FF9C]">Online</SelectItem>
+            <SelectItem value="offline" className="font-mono text-sm text-[#FF2E2E]">Offline</SelectItem>
+            <SelectItem value="unknown" className="font-mono text-sm text-[#888888]">Unknown</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      
+      {/* Results count */}
+      {(searchQuery || statusFilter !== 'all') && (
+        <p className="text-[10px] text-[#888888] mb-2 font-mono">
+          Showing {filteredHistory.length} of {history.length} entries
+          {uniqueUsernames.length > 1 && ` • ${uniqueUsernames.length} users tracked`}
+        </p>
+      )}
+      
+      {/* History List */}
+      <ScrollArea className="flex-1 min-h-[250px] max-h-[350px]">
         <div className="space-y-2 font-mono text-sm">
           <AnimatePresence>
-            {history.length === 0 ? (
-              <p className="text-[#888888] text-center py-8">No activity recorded yet</p>
+            {filteredHistory.length === 0 ? (
+              <p className="text-[#888888] text-center py-8">
+                {history.length === 0 ? 'No activity recorded yet' : 'No matching entries found'}
+              </p>
             ) : (
-              history.map((entry, index) => {
+              filteredHistory.map((entry, index) => {
                 // Determine icon and color based on status
                 const isOnlineNow = entry.is_currently_online || entry.online_status?.toLowerCase() === "online now";
                 const userNotFound = !entry.user_exists || entry.online_status === "User not found";
                 
-                let statusColor = "text-[#00F0FF]"; // Default cyan for "online X ago"
+                let statusColor = "text-[#00F0FF]"; // Default cyan for "offline X ago"
                 let StatusIcon = Clock;
                 
                 if (userNotFound) {
@@ -176,7 +269,7 @@ const HistoryLog = ({ history, onClear }) => {
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: 20 }}
-                    transition={{ delay: index * 0.05 }}
+                    transition={{ delay: Math.min(index * 0.03, 0.3) }}
                     className={`flex items-start gap-3 p-3 rounded-lg ${
                       entry.status_changed ? 'bg-[#151515]' : 'bg-transparent'
                     }`}
@@ -184,12 +277,19 @@ const HistoryLog = ({ history, onClear }) => {
                   >
                     <StatusIcon className={`w-4 h-4 mt-1 ${statusColor}`} />
                     <div className="flex-1 min-w-0">
+                      {/* Username */}
+                      <p className="text-[#00F0FF] text-xs flex items-center gap-1 mb-1">
+                        <User className="w-3 h-3" />
+                        {entry.target_username || 'Unknown User'}
+                      </p>
+                      {/* Status */}
                       <p className={statusColor}>
                         {entry.online_status || (entry.is_currently_online ? 'ONLINE' : 'OFFLINE')}
                         {entry.status_changed && (
                           <span className="ml-2 text-[#FF9500]">[CHANGED]</span>
                         )}
                       </p>
+                      {/* Timestamp */}
                       <p className="text-[#888888] text-xs mt-1">
                         {new Date(entry.checked_at).toLocaleString()}
                       </p>
