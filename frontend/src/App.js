@@ -33,8 +33,61 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Session Health Indicator Component
+const SessionHealthIndicator = ({ sessionHealth }) => {
+  const getHealthDisplay = () => {
+    if (!sessionHealth || sessionHealth.status === "unknown") {
+      return { 
+        text: "UNKNOWN", 
+        color: "text-[#888888]", 
+        bgColor: "bg-[#888888]/10",
+        borderColor: "border-[#888888]/30"
+      };
+    }
+    if (sessionHealth.status === "active") {
+      const lastSuccess = sessionHealth.last_success ? new Date(sessionHealth.last_success) : null;
+      const timeSince = lastSuccess ? Math.round((Date.now() - lastSuccess.getTime()) / 60000) : null;
+      return { 
+        text: timeSince !== null ? `ACTIVE (${timeSince}m ago)` : "ACTIVE", 
+        color: "text-[#00FF9C]", 
+        bgColor: "bg-[#00FF9C]/10",
+        borderColor: "border-[#00FF9C]/30"
+      };
+    }
+    return { 
+      text: "EXPIRED", 
+      color: "text-[#FF2E2E]", 
+      bgColor: "bg-[#FF2E2E]/10",
+      borderColor: "border-[#FF2E2E]/30",
+      warning: "Please refresh your PHPSESSID cookie"
+    };
+  };
+
+  const display = getHealthDisplay();
+
+  return (
+    <div 
+      className={`${display.bgColor} border ${display.borderColor} rounded-lg p-3 font-mono`}
+      data-testid="session-health-indicator"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Shield className={`w-4 h-4 ${display.color}`} />
+          <span className="text-xs text-[#888888] uppercase tracking-wider">Session</span>
+        </div>
+        <span className={`text-xs font-bold ${display.color}`}>{display.text}</span>
+      </div>
+      {display.warning && (
+        <p className="mt-2 text-[10px] text-[#FF9500] animate-pulse">
+          ⚠️ {display.warning}
+        </p>
+      )}
+    </div>
+  );
+};
+
 // Status Hero Component - Shows status for each tracked user
-const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring }) => {
+const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring, sessionHealth }) => {
   const userCount = targetUsernames?.length || 0;
   
   // Helper to get display properties for a status
@@ -121,6 +174,11 @@ const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring }
         <p className="mt-6 text-center text-xs text-[#888888] font-mono" data-testid="last-checked">
           {lastChecked ? `Last checked: ${new Date(lastChecked).toLocaleString()}` : "Not checked yet"}
         </p>
+        
+        {/* Session Health */}
+        <div className="mt-4">
+          <SessionHealthIndicator sessionHealth={sessionHealth} />
+        </div>
       </div>
     </motion.div>
   );
@@ -598,6 +656,7 @@ function App() {
   const [settings, setSettings] = useState(null);
   const [history, setHistory] = useState([]);
   const [userStatuses, setUserStatuses] = useState({});  // Per-user status tracking
+  const [sessionHealth, setSessionHealth] = useState({ status: "unknown" });
   const [monitoringStatus, setMonitoringStatus] = useState({
     is_monitoring: false,
     last_checked: null,
@@ -607,6 +666,16 @@ function App() {
   const [isSaving, setIsSaving] = useState(false);
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+
+  // Fetch session health
+  const fetchSessionHealth = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/session/health`);
+      setSessionHealth(response.data);
+    } catch (error) {
+      console.error('Failed to fetch session health:', error);
+    }
+  }, []);
 
   // Fetch settings
   const fetchSettings = useCallback(async () => {
@@ -730,6 +799,11 @@ function App() {
               icon: '/favicon.ico'
             });
           }
+        } else if (data.type === 'session_health') {
+          setSessionHealth(data);
+          if (data.status === 'expired') {
+            toast.error('Session expired! Please refresh your cookie.', { duration: 30000 });
+          }
         } else if (data.type === 'connection') {
           setMonitoringStatus(prev => ({
             ...prev,
@@ -757,6 +831,7 @@ function App() {
     fetchSettings();
     fetchHistory();
     fetchMonitoringStatus();
+    fetchSessionHealth();
     connectWebSocket();
     
     return () => {
@@ -767,7 +842,18 @@ function App() {
         clearTimeout(reconnectTimeoutRef.current);
       }
     };
-  }, [fetchSettings, fetchHistory, fetchMonitoringStatus, connectWebSocket]);
+  }, [fetchSettings, fetchHistory, fetchMonitoringStatus, fetchSessionHealth, connectWebSocket]);
+
+  // Periodically refresh session health indicator
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (sessionHealth.status === 'active') {
+        // Force re-render to update "X min ago"
+        setSessionHealth(prev => ({ ...prev }));
+      }
+    }, 60000); // Update every minute
+    return () => clearInterval(interval);
+  }, [sessionHealth.status]);
 
   // Save settings
   const handleSaveSettings = async (formData) => {
@@ -891,6 +977,7 @@ function App() {
                 lastChecked={monitoringStatus.last_checked}
                 targetUsernames={monitoringStatus.target_usernames}
                 isMonitoring={monitoringStatus.is_monitoring}
+                sessionHealth={sessionHealth}
               />
               <ControlPanel 
                 isMonitoring={monitoringStatus.is_monitoring}
@@ -922,6 +1009,7 @@ function App() {
               lastChecked={monitoringStatus.last_checked}
               targetUsernames={monitoringStatus.target_usernames}
               isMonitoring={monitoringStatus.is_monitoring}
+              sessionHealth={sessionHealth}
             />
           </div>
           

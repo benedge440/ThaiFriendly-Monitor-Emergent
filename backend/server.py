@@ -57,6 +57,14 @@ current_status_text = None
 last_checked = None
 connected_websockets: List[WebSocket] = []
 
+# Session health tracking
+session_health = {
+    "status": "unknown",  # "active", "expired", "unknown"
+    "last_success": None,
+    "last_failure": None,
+    "failure_reason": None
+}
+
 # Models
 class Settings(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -104,6 +112,12 @@ class MonitoringStatus(BaseModel):
     last_checked: Optional[str] = None
     target_username: str = "MayimeTH"
     user_exists: bool = True
+
+class SessionHealth(BaseModel):
+    status: str  # "active", "expired", "unknown"
+    last_success: Optional[str] = None
+    last_failure: Optional[str] = None
+    failure_reason: Optional[str] = None
 
 # Helper functions
 def encrypt_password(password: str) -> str:
@@ -368,7 +382,7 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
 
 async def check_single_user(session_cookie: str, target_username: str, notification_email: str, email: str = "", password: str = ""):
     """Check status for a single user and record to history"""
-    global current_status_text, last_checked
+    global current_status_text, last_checked, session_health
     
     # Get previous status for this user
     last_history = await db.status_history.find_one(
@@ -383,6 +397,26 @@ async def check_single_user(session_cookie: str, target_username: str, notificat
     status_result = await check_thaifriendly_status(email, password, target_username, session_cookie)
     
     checked_at = datetime.now(timezone.utc).isoformat()
+    
+    # Update session health based on result
+    if status_result.get("error"):
+        error_msg = status_result.get("error", "")
+        if "session expired" in error_msg.lower() or "login required" in error_msg.lower():
+            session_health["status"] = "expired"
+            session_health["last_failure"] = checked_at
+            session_health["failure_reason"] = error_msg
+            # Broadcast session expired
+            await broadcast_status({
+                "type": "session_health",
+                "status": "expired",
+                "last_failure": checked_at,
+                "failure_reason": error_msg
+            })
+    elif status_result.get("user_exists", True):
+        # Successful check (even if user not found, session worked)
+        session_health["status"] = "active"
+        session_health["last_success"] = checked_at
+        session_health["failure_reason"] = None
     
     if status_result.get("error"):
         logger.error(f"Failed to check status for {target_username}: {status_result['error']}")
@@ -640,6 +674,16 @@ async def get_monitoring_status():
         is_currently_online=current_status_text == "Online now" if current_status_text else False,
         last_checked=last_checked,
         target_username=target_username
+    )
+
+@api_router.get("/session/health", response_model=SessionHealth)
+async def get_session_health():
+    """Get current session health status"""
+    return SessionHealth(
+        status=session_health["status"],
+        last_success=session_health["last_success"],
+        last_failure=session_health["last_failure"],
+        failure_reason=session_health["failure_reason"]
     )
 
 @api_router.post("/monitoring/start")
