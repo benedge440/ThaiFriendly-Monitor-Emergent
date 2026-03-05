@@ -21,7 +21,9 @@ import {
   Clock,
   Search,
   Filter,
-  User
+  User,
+  Camera,
+  X
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -233,6 +235,7 @@ const ControlPanel = ({ isMonitoring, onStart, onStop, onRefresh, isLoading }) =
 const HistoryLog = ({ history, onClear }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [viewingScreenshot, setViewingScreenshot] = useState(null);
   
   // Get unique usernames from history for reference
   const uniqueUsernames = useMemo(() => {
@@ -395,6 +398,17 @@ const HistoryLog = ({ history, onClear }) => {
                       <p className="text-[#888888] text-xs mt-1">
                         {new Date(entry.checked_at).toLocaleString()}
                       </p>
+                      {/* Screenshot button if available */}
+                      {entry.profile_screenshot && (
+                        <button
+                          onClick={() => setViewingScreenshot(entry)}
+                          className="mt-2 flex items-center gap-1 text-[#00F0FF] hover:text-[#00FF9C] text-xs transition-colors"
+                          data-testid={`view-screenshot-${index}`}
+                        >
+                          <Camera className="w-3 h-3" />
+                          View Profile Screenshot
+                        </button>
+                      )}
                     </div>
                   </motion.div>
                 );
@@ -403,6 +417,57 @@ const HistoryLog = ({ history, onClear }) => {
           </AnimatePresence>
         </div>
       </div>
+      
+      {/* Screenshot Modal */}
+      <AnimatePresence>
+        {viewingScreenshot && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            onClick={() => setViewingScreenshot(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative max-w-4xl max-h-[90vh] w-full bg-[#0A0A0A] border border-[#262626] rounded-lg overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-4 border-b border-[#262626]">
+                <div className="font-mono">
+                  <p className="text-[#00F0FF] text-sm flex items-center gap-2">
+                    <Camera className="w-4 h-4" />
+                    Profile Screenshot
+                  </p>
+                  <p className="text-[#888888] text-xs mt-1">
+                    {viewingScreenshot.target_username} • {new Date(viewingScreenshot.checked_at).toLocaleString()}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setViewingScreenshot(null)}
+                  className="text-[#888888] hover:text-white p-2 transition-colors"
+                  data-testid="close-screenshot-modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              {/* Screenshot Image */}
+              <div className="overflow-auto max-h-[calc(90vh-80px)]">
+                <img
+                  src={`data:image/jpeg;base64,${viewingScreenshot.profile_screenshot}`}
+                  alt={`${viewingScreenshot.target_username}'s profile`}
+                  className="w-full h-auto"
+                  data-testid="screenshot-image"
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

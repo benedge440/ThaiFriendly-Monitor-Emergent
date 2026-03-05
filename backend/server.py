@@ -104,6 +104,7 @@ class StatusHistoryResponse(BaseModel):
     checked_at: str
     status_changed: bool
     user_exists: bool
+    profile_screenshot: Optional[str] = None  # Base64 encoded screenshot
 
 class MonitoringStatus(BaseModel):
     is_monitoring: bool
@@ -254,10 +255,11 @@ def parse_online_status(soup: BeautifulSoup, page_text: str) -> dict:
     
     return result
 
-async def check_thaifriendly_status(email: str, password: str, target_username: str, session_cookie: str = None) -> dict:
+async def check_thaifriendly_status(email: str, password: str, target_username: str, session_cookie: str = None, capture_screenshot: bool = False) -> dict:
     """
     Check target user's online status on ThaiFriendly using Playwright.
     Uses session cookie for authentication.
+    If capture_screenshot is True, captures the profile page screenshot.
     """
     global current_status_text, last_checked
     
@@ -265,7 +267,8 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
         "online_status": "Error",
         "is_currently_online": False,
         "user_exists": False,
-        "error": None
+        "error": None,
+        "profile_screenshot": None
     }
     
     if not session_cookie:
@@ -342,6 +345,16 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
                     result["is_currently_online"] = True
                     last_checked = datetime.now(timezone.utc).isoformat()
                     current_status_text = result["online_status"]
+                    
+                    # Capture screenshot if requested
+                    if capture_screenshot:
+                        try:
+                            screenshot_bytes = await page.screenshot(full_page=False, type="jpeg", quality=60)
+                            result["profile_screenshot"] = base64.b64encode(screenshot_bytes).decode('utf-8')
+                            logger.info(f"Captured profile screenshot for {target_username}")
+                        except Exception as e:
+                            logger.error(f"Failed to capture screenshot: {e}")
+                    
                     await browser.close()
                     return result
             
@@ -393,8 +406,10 @@ async def check_single_user(session_cookie: str, target_username: str, notificat
     previous_status = last_history.get('online_status') if last_history else None
     previous_is_online = last_history.get('is_currently_online', False) if last_history else False
     
-    # Check current status
-    status_result = await check_thaifriendly_status(email, password, target_username, session_cookie)
+    # Check current status - capture screenshot if user was previously offline (to catch "became online" moment)
+    # We capture screenshot proactively when checking, and only save it if status changes to online
+    should_capture_screenshot = not previous_is_online  # Capture if previously offline
+    status_result = await check_thaifriendly_status(email, password, target_username, session_cookie, capture_screenshot=should_capture_screenshot)
     
     checked_at = datetime.now(timezone.utc).isoformat()
     
@@ -472,7 +487,7 @@ async def check_single_user(session_cookie: str, target_username: str, notificat
     status_changed = previous_status != status_result["online_status"]
     became_online = not previous_is_online and status_result["is_currently_online"]
     
-    # Save to history
+    # Save to history - include screenshot only when user becomes online
     history_entry = {
         "id": str(uuid.uuid4()),
         "target_username": target_username,
@@ -482,6 +497,12 @@ async def check_single_user(session_cookie: str, target_username: str, notificat
         "status_changed": status_changed,
         "user_exists": True
     }
+    
+    # Add screenshot only when status changes to online
+    if became_online and status_result.get("profile_screenshot"):
+        history_entry["profile_screenshot"] = status_result["profile_screenshot"]
+        logger.info(f"Saved profile screenshot for {target_username} (became online)")
+    
     await db.status_history.insert_one(history_entry)
     
     # Update global status for the most recent check
@@ -663,7 +684,8 @@ async def get_history(limit: int = None):
             is_currently_online=h.get('is_currently_online', h.get('is_online', False)),
             checked_at=h.get('checked_at', ''),
             status_changed=h.get('status_changed', False),
-            user_exists=h.get('user_exists', True)
+            user_exists=h.get('user_exists', True),
+            profile_screenshot=h.get('profile_screenshot')
         ))
     
     return result
