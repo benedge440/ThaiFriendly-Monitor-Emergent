@@ -638,11 +638,16 @@ async def update_settings(settings: SettingsUpdate):
     return {"status": "success", "message": "Settings updated"}
 
 @api_router.get("/history", response_model=List[StatusHistoryResponse])
-async def get_history(limit: int = 100):
-    history = await db.status_history.find(
+async def get_history(limit: int = None):
+    query = db.status_history.find(
         {},
         {"_id": 0}
-    ).sort("checked_at", -1).limit(limit).to_list(limit)
+    ).sort("checked_at", -1)
+    
+    if limit:
+        history = await query.limit(limit).to_list(limit)
+    else:
+        history = await query.to_list(None)
     
     result = []
     for h in history:
