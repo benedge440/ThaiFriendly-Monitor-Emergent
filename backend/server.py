@@ -717,7 +717,7 @@ async def update_settings(settings: SettingsUpdate):
     return {"status": "success", "message": "Settings updated"}
 
 @api_router.get("/history", response_model=List[StatusHistoryResponse])
-async def get_history(limit: int = None):
+async def get_history(limit: int = 500):
     query = db.status_history.find(
         {},
         {"_id": 0}
@@ -866,6 +866,14 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
+    # Create indexes for optimized queries
+    try:
+        await db.status_history.create_index([("target_username", 1), ("checked_at", -1)])
+        await db.settings.create_index([("id", 1)])
+        logger.info("Database indexes created/verified")
+    except Exception as e:
+        logger.warning(f"Could not create indexes: {e}")
+    
     if not scheduler.running:
         scheduler.start()
     logger.info("NetSentinel API started")
