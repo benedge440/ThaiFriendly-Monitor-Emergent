@@ -5,6 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import re
+import subprocess
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -22,6 +23,70 @@ from playwright.async_api import async_playwright
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Configure logging early
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+def ensure_playwright_browsers():
+    """
+    Check if Playwright browsers are installed, and install them if missing.
+    This ensures the app works on fresh deployments without manual intervention.
+    """
+    try:
+        # Try to find the browser executable
+        from playwright._impl._driver import compute_driver_executable
+        driver_executable = compute_driver_executable()
+        
+        # Check if chromium is installed by looking for browser path
+        result = subprocess.run(
+            ['python', '-m', 'playwright', 'install', '--dry-run', 'chromium'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        # If dry-run shows browsers need installation, install them
+        if 'chromium' in result.stdout.lower() or result.returncode != 0:
+            logger.info("Playwright browsers not found. Installing Chromium...")
+            install_result = subprocess.run(
+                ['python', '-m', 'playwright', 'install', 'chromium'],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minutes timeout for download
+            )
+            if install_result.returncode == 0:
+                logger.info("Playwright Chromium installed successfully!")
+            else:
+                logger.error(f"Failed to install Playwright browsers: {install_result.stderr}")
+        else:
+            logger.info("Playwright browsers already installed.")
+            
+    except subprocess.TimeoutExpired:
+        logger.error("Timeout while checking/installing Playwright browsers")
+    except Exception as e:
+        # Fallback: try direct installation
+        logger.warning(f"Browser check failed ({e}), attempting direct installation...")
+        try:
+            install_result = subprocess.run(
+                ['python', '-m', 'playwright', 'install', 'chromium'],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            if install_result.returncode == 0:
+                logger.info("Playwright Chromium installed successfully!")
+            else:
+                logger.error(f"Failed to install Playwright browsers: {install_result.stderr}")
+        except Exception as install_error:
+            logger.error(f"Could not install Playwright browsers: {install_error}")
+
+# Run browser check on module load (before app starts)
+logger.info("Checking Playwright browser installation...")
+ensure_playwright_browsers()
+
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -37,13 +102,6 @@ app = FastAPI()
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Encryption key for credentials
 SECRET_KEY = os.environ.get('SECRET_KEY', 'netsentinel-secret-key-2024')
