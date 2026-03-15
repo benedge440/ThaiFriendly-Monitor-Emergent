@@ -772,6 +772,82 @@ async def update_settings(settings: SettingsUpdate):
     
     return {"status": "success", "message": "Settings updated"}
 
+@api_router.get("/debug/check/{username}")
+async def debug_check_user(username: str):
+    """
+    Debug endpoint that checks a user's status and returns a screenshot
+    of exactly what the scraper sees. Use this to verify the scraper
+    is seeing the same page as your browser.
+    """
+    settings_doc = await db.settings.find_one({}, {"_id": 0})
+    if not settings_doc:
+        raise HTTPException(status_code=400, detail="No settings configured")
+    
+    session_cookie = settings_doc.get('session_cookie')
+    if not session_cookie:
+        raise HTTPException(status_code=400, detail="No session cookie configured")
+    
+    result = {
+        "username": username,
+        "status": None,
+        "screenshot": None,
+        "page_text_preview": None,
+        "error": None
+    }
+    
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            )
+            
+            await context.add_cookies([{
+                "name": "PHPSESSID",
+                "value": session_cookie,
+                "domain": ".thaifriendly.com",
+                "path": "/"
+            }])
+            
+            page = await context.new_page()
+            await page.set_extra_http_headers({
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache"
+            })
+            
+            import time
+            cache_buster = int(time.time() * 1000)
+            await page.goto(f"https://www.thaifriendly.com/{username}?_={cache_buster}", wait_until="networkidle", timeout=30000)
+            await asyncio.sleep(3)
+            
+            # Get page text
+            page_text = await page.inner_text("body")
+            page_text_lower = page_text.lower()
+            
+            # Capture screenshot
+            screenshot_bytes = await page.screenshot(full_page=False, type="jpeg", quality=70)
+            screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
+            
+            # Detect status
+            offline_match = re.search(r'offline\s*\((\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)\)', page_text_lower)
+            if offline_match:
+                result["status"] = f"Offline ({offline_match.group(1)})"
+            elif re.search(r'(?<!\d[\s,])\bonline\b', page_text_lower):
+                result["status"] = "Online now"
+            else:
+                result["status"] = "Status unknown"
+            
+            result["screenshot"] = screenshot_base64
+            result["page_text_preview"] = page_text[:1000]
+            
+            await browser.close()
+            
+    except Exception as e:
+        result["error"] = str(e)
+    
+    return result
+
 @api_router.get("/history", response_model=List[StatusHistoryResponse])
 async def get_history(limit: int = 500):
     query = db.status_history.find(
