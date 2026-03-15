@@ -368,7 +368,15 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
             # Check if user not found or need login
             page_text_lower = page_text.lower()
             
-            if "join thaifriendly" in page_text_lower and target_username.lower() not in page_text_lower:
+            # Check for signs we're on the homepage instead of profile (session expired)
+            homepage_indicators = [
+                "join thaifriendly to see",
+                "thai girls + farang guys online now",
+                "thai personals profiles made every day"
+            ]
+            is_homepage = any(indicator in page_text_lower for indicator in homepage_indicators)
+            
+            if is_homepage and target_username.lower() not in page_text_lower:
                 result["error"] = "Session expired - please get a new PHPSESSID cookie from your browser"
                 result["online_status"] = "Session expired"
                 await browser.close()
@@ -393,30 +401,8 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
             # Look for "Online now" or "Offline (X ago)" patterns
             # ThaiFriendly format: "Offline (2 day ago)" or "Online"
             
-            # Check for "Online now" or just "Online" status
-            online_now_match = re.search(r'\b(online)\b(?!\s*\()', page_text_lower)
-            if online_now_match:
-                # Make sure it's the user's status, not just text
-                context_match = re.search(rf'{target_username.lower()}.*?\b(online)\b', page_text_lower, re.DOTALL)
-                if context_match:
-                    result["online_status"] = "Online now"
-                    result["is_currently_online"] = True
-                    last_checked = datetime.now(timezone.utc).isoformat()
-                    current_status_text = result["online_status"]
-                    
-                    # Capture screenshot if requested
-                    if capture_screenshot:
-                        try:
-                            screenshot_bytes = await page.screenshot(full_page=False, type="jpeg", quality=60)
-                            result["profile_screenshot"] = base64.b64encode(screenshot_bytes).decode('utf-8')
-                            logger.info(f"Captured profile screenshot for {target_username}")
-                        except Exception as e:
-                            logger.error(f"Failed to capture screenshot: {e}")
-                    
-                    await browser.close()
-                    return result
-            
-            # Check for "Offline (X day/hour/minute ago)"
+            # IMPORTANT: Check for "Offline" FIRST since "online" appears in marketing text on the page
+            # Check for "Offline (X day/hour/minute ago)" - this is the specific status format
             offline_match = re.search(r'offline\s*\((\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)\)', page_text_lower)
             if offline_match:
                 time_ago = offline_match.group(1)
@@ -424,6 +410,7 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
                 result["is_currently_online"] = False
                 last_checked = datetime.now(timezone.utc).isoformat()
                 current_status_text = result["online_status"]
+                logger.info(f"Detected OFFLINE status for {target_username}: Offline ({time_ago})")
                 await browser.close()
                 return result
             
@@ -435,6 +422,38 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
                 result["is_currently_online"] = False
                 last_checked = datetime.now(timezone.utc).isoformat()
                 current_status_text = result["online_status"]
+                logger.info(f"Detected LAST ACTIVE status for {target_username}: Last active {time_ago}")
+                await browser.close()
+                return result
+            
+            # Only check for "Online" if we didn't find offline patterns
+            # Look for standalone "Online" that's NOT part of marketing text like "X Girls Online Now"
+            # The user's status typically appears as just "Online" near their name, not "Online Now" with numbers
+            
+            # First, try to find status-specific online indicator (not marketing text)
+            # Marketing text pattern: "26,021 Thai Girls Online Now" - has numbers before "online"
+            # User status pattern: username followed by "Online" or "Online" near profile info
+            
+            # Check if there's "Online" that's NOT preceded by numbers (marketing text)
+            profile_online_match = re.search(r'(?<!\d[\s,])\bonline\b(?!\s*now\s*\n)', page_text_lower)
+            if profile_online_match:
+                # Additional check: make sure the offline pattern truly isn't there
+                # (handles edge cases where both words might appear)
+                result["online_status"] = "Online now"
+                result["is_currently_online"] = True
+                last_checked = datetime.now(timezone.utc).isoformat()
+                current_status_text = result["online_status"]
+                logger.info(f"Detected ONLINE status for {target_username}")
+                
+                # Capture screenshot if requested
+                if capture_screenshot:
+                    try:
+                        screenshot_bytes = await page.screenshot(full_page=False, type="jpeg", quality=60)
+                        result["profile_screenshot"] = base64.b64encode(screenshot_bytes).decode('utf-8')
+                        logger.info(f"Captured profile screenshot for {target_username}")
+                    except Exception as e:
+                        logger.error(f"Failed to capture screenshot: {e}")
+                
                 await browser.close()
                 return result
             
