@@ -23,7 +23,8 @@ import {
   Filter,
   User,
   Camera,
-  X
+  X,
+  Bug
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -89,7 +90,7 @@ const SessionHealthIndicator = ({ sessionHealth }) => {
 };
 
 // Status Hero Component - Shows status for each tracked user
-const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring, sessionHealth }) => {
+const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring, sessionHealth, onDebugCheck }) => {
   const userCount = targetUsernames?.length || 0;
   
   // Helper to get display properties for a status
@@ -152,9 +153,19 @@ const StatusHero = ({ userStatuses, lastChecked, targetUsernames, isMonitoring, 
                   animate={{ opacity: 1, y: 0 }}
                   data-testid={`user-status-${username}`}
                 >
-                  <div className="flex items-center gap-2 mb-2">
-                    <User className="w-4 h-4 text-[#00F0FF]" />
-                    <span className="font-mono text-sm text-[#00F0FF] truncate">{username}</span>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <User className="w-4 h-4 text-[#00F0FF]" />
+                      <span className="font-mono text-sm text-[#00F0FF] truncate">{username}</span>
+                    </div>
+                    <button
+                      onClick={() => onDebugCheck(username)}
+                      className="text-[#888888] hover:text-[#00F0FF] transition-colors p-1"
+                      title="Debug: View what scraper sees"
+                      data-testid={`debug-btn-${username}`}
+                    >
+                      <Bug className="w-4 h-4" />
+                    </button>
                   </div>
                   <div className={`flex items-center gap-2 ${style.color}`}>
                     <StatusIcon className={`w-5 h-5 ${style.pulse ? 'animate-pulse' : ''}`} />
@@ -732,8 +743,33 @@ function App() {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [debugData, setDebugData] = useState(null);  // Debug check data
+  const [isDebugLoading, setIsDebugLoading] = useState(false);
   const wsRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+
+  // Debug check function - captures screenshot of what scraper sees
+  const handleDebugCheck = useCallback(async (username) => {
+    setIsDebugLoading(true);
+    setDebugData({ loading: true, username });
+    try {
+      const response = await axios.get(`${API}/debug/check/${username}`);
+      setDebugData({
+        ...response.data,
+        loading: false
+      });
+    } catch (error) {
+      console.error('Debug check failed:', error);
+      setDebugData({
+        username,
+        error: error.message || 'Failed to fetch debug data',
+        loading: false
+      });
+      toast.error('Debug check failed');
+    } finally {
+      setIsDebugLoading(false);
+    }
+  }, []);
 
   // Fetch session health
   const fetchSessionHealth = useCallback(async () => {
@@ -1046,6 +1082,7 @@ function App() {
                 targetUsernames={monitoringStatus.target_usernames}
                 isMonitoring={monitoringStatus.is_monitoring}
                 sessionHealth={sessionHealth}
+                onDebugCheck={handleDebugCheck}
               />
               <ControlPanel 
                 isMonitoring={monitoringStatus.is_monitoring}
@@ -1078,6 +1115,7 @@ function App() {
               targetUsernames={monitoringStatus.target_usernames}
               isMonitoring={monitoringStatus.is_monitoring}
               sessionHealth={sessionHealth}
+              onDebugCheck={handleDebugCheck}
             />
           </div>
           
@@ -1117,6 +1155,99 @@ function App() {
           <p>Secure monitoring system • Encrypted credentials</p>
         </motion.footer>
       </div>
+
+      {/* Debug Screenshot Modal */}
+      <AnimatePresence>
+        {debugData && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            onClick={() => setDebugData(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="relative max-w-5xl max-h-[90vh] w-full bg-[#0A0A0A] border border-[#262626] rounded-lg overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-center justify-between p-4 border-b border-[#262626]">
+                <div className="font-mono">
+                  <p className="text-[#00F0FF] text-sm flex items-center gap-2">
+                    <Bug className="w-4 h-4" />
+                    Debug Check: {debugData.username}
+                  </p>
+                  {debugData.status && (
+                    <p className="text-xs mt-1">
+                      <span className="text-[#888888]">Scraper detected: </span>
+                      <span className={debugData.status?.toLowerCase().includes('online now') ? 'text-[#00FF9C]' : 'text-[#FF2E2E]'}>
+                        {debugData.status}
+                      </span>
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setDebugData(null)}
+                  className="text-[#888888] hover:text-white p-2 transition-colors"
+                  data-testid="close-debug-modal"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              
+              {/* Content */}
+              <div className="overflow-auto max-h-[calc(90vh-120px)]">
+                {debugData.loading ? (
+                  <div className="flex items-center justify-center py-20">
+                    <RefreshCcw className="w-8 h-8 text-[#00F0FF] animate-spin" />
+                    <span className="ml-3 text-[#888888] font-mono">Capturing screenshot...</span>
+                  </div>
+                ) : debugData.error ? (
+                  <div className="p-8 text-center">
+                    <p className="text-[#FF2E2E] font-mono">{debugData.error}</p>
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    {/* Screenshot */}
+                    {debugData.screenshot && (
+                      <div className="mb-4">
+                        <p className="text-xs text-[#888888] mb-2 font-mono">SCREENSHOT (What the scraper sees):</p>
+                        <img
+                          src={`data:image/jpeg;base64,${debugData.screenshot}`}
+                          alt={`Debug screenshot for ${debugData.username}`}
+                          className="w-full h-auto border border-[#262626] rounded"
+                          data-testid="debug-screenshot"
+                        />
+                      </div>
+                    )}
+                    
+                    {/* Page Text Preview */}
+                    {debugData.page_text_preview && (
+                      <div className="mt-4">
+                        <p className="text-xs text-[#888888] mb-2 font-mono">PAGE TEXT (First 1000 chars):</p>
+                        <pre className="bg-black p-4 rounded text-xs text-[#00F0FF] font-mono overflow-x-auto whitespace-pre-wrap max-h-[200px] overflow-y-auto">
+                          {debugData.page_text_preview}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {/* Footer */}
+              <div className="p-4 border-t border-[#262626] bg-[#050505]">
+                <p className="text-xs text-[#888888] font-mono">
+                  Compare this screenshot with what you see when visiting the profile directly in your browser.
+                  If they differ, the session cookie may be from a different account or expired.
+                </p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
