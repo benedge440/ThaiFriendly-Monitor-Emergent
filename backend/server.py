@@ -337,7 +337,15 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+            
+            # Create fresh context with no stored data
+            context = await browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                bypass_csp=True,
+                ignore_https_errors=True,
+                java_script_enabled=True
+            )
             
             # Set the session cookie
             await context.add_cookies([{
@@ -349,11 +357,24 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
             
             page = await context.new_page()
             
+            # Set extra HTTP headers to prevent caching
+            await page.set_extra_http_headers({
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            })
+            
             logger.info(f"Fetching profile for {target_username} with Playwright...")
             
+            # Add timestamp to URL to bypass any server-side caching
+            import time
+            cache_buster = int(time.time() * 1000)
+            profile_url = f"https://www.thaifriendly.com/{target_username}?_={cache_buster}"
+            
             try:
-                await page.goto(f"https://www.thaifriendly.com/{target_username}", wait_until="networkidle", timeout=30000)
-                await asyncio.sleep(3)  # Wait for dynamic content
+                await page.goto(profile_url, wait_until="networkidle", timeout=30000)
+                await asyncio.sleep(3)  # Wait for dynamic content to load
+                
             except Exception as e:
                 logger.error(f"Navigation failed: {e}")
                 result["error"] = f"Failed to load profile: {str(e)}"
@@ -363,7 +384,15 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
             # Get page text after JavaScript execution
             page_text = await page.inner_text("body")
             
+            # Also try to get the page HTML for more detailed parsing
+            page_html = await page.content()
+            
             logger.info(f"Page text preview: {page_text[:500]}")
+            
+            # Log any status-related HTML elements for debugging
+            status_html = re.findall(r'<[^>]*(?:status|online|offline)[^>]*>[^<]*<', page_html.lower())
+            if status_html:
+                logger.info(f"Status HTML elements: {status_html[:3]}")
             
             # Check if user not found or need login
             page_text_lower = page_text.lower()
@@ -398,11 +427,19 @@ async def check_thaifriendly_status(email: str, password: str, target_username: 
             
             result["user_exists"] = True
             
+            # Log more context around status detection for debugging
+            # Find all instances of "offline" and "online" with surrounding context
+            offline_contexts = re.findall(r'.{0,30}offline.{0,50}', page_text_lower)
+            online_contexts = re.findall(r'.{0,30}(?<!\d\s)online(?!\s*now\s*\n).{0,30}', page_text_lower)
+            logger.info(f"Offline contexts found: {offline_contexts[:3]}")  # Log first 3 matches
+            logger.info(f"Online contexts found: {online_contexts[:3]}")
+            
             # Look for "Online now" or "Offline (X ago)" patterns
             # ThaiFriendly format: "Offline (2 day ago)" or "Online"
             
             # IMPORTANT: Check for "Offline" FIRST since "online" appears in marketing text on the page
             # Check for "Offline (X day/hour/minute ago)" - this is the specific status format
+            # Also match "Offline (X hour ago)" singular and plural forms
             offline_match = re.search(r'offline\s*\((\d+\s*(?:second|minute|hour|day|week|month|year)s?\s*ago)\)', page_text_lower)
             if offline_match:
                 time_ago = offline_match.group(1)
