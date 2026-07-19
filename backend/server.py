@@ -988,10 +988,24 @@ async def websocket_endpoint(websocket: WebSocket):
 # Include the router
 app.include_router(api_router)
 
+cors_origins = [origin.strip() for origin in os.environ.get('CORS_ORIGINS', '').split(',') if origin.strip()]
+
+if not cors_origins:
+    raise RuntimeError(
+        "CORS_ORIGINS environment variable must be set to a comma-separated list of allowed origins "
+        "(e.g. 'https://example.com,https://app.example.com')"
+    )
+
+if '*' in cors_origins:
+    raise RuntimeError(
+        "CORS_ORIGINS cannot include '*' while allow_credentials=True — browsers reject wildcard "
+        "origins on credentialed requests. List explicit origins instead."
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
